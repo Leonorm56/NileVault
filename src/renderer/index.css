@@ -1,0 +1,144 @@
+@import "./fonts.css" layer(base);
+
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Noto Sans", ui-sans-serif, system-ui, sans-serif,
+    "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  --font-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco,
+    Consolas, "Liberation Mono", "Courier New", monospace;
+  --font-noto-sans: "Noto Sans";
+  --font-turret-road: "Turret Road";
+
+  /*
+    Design system — deep navy canvas, gold accents only.
+    The neutral scale below is the navy family: every shade carries a
+    blue undertone so the UI never falls into plain gray or black.
+  */
+  --color-nile-gold-50: #fefcf3;
+  --color-nile-gold-100: #fdf6e0;
+  --color-nile-gold-200: #fbe9b3;
+  --color-nile-gold-300: #f8db80;
+  --color-nile-gold-400: #E8C454;
+  --color-nile-gold-500: #D4A843;
+  --color-nile-gold-600: #C99A36;
+  --color-nile-gold-700: #BF8E2A;
+  --color-nile-gold-800: #A67A1E;
+  --color-nile-gold-900: #8A6615;
+  --color-nile-gold-950: #6B4F0E;
+  --color-nile-gold: #D4A843;
+
+  --color-nile-100: #fdf6e0;
+  --color-nile-200: #fbe9b3;
+  --color-nile-300: #f8db80;
+  --color-nile-400: #E8C454;
+  --color-nile-500: #D4A843;
+  --color-nile-600: #C99A36;
+  --color-nile-700: #BF8E2A;
+  --color-nile-800: #A67A1E;
+  --color-nile-900: #8A6615;
+  --color-nile-950: #6B4F0E;
+  --color-nile: #D4A843;
+
+  --color-neutral-50: #f0f4fa;
+  --color-neutral-100: #dee6f0;
+  --color-neutral-200: #c4d2e6;
+  --color-neutral-300: #a8bcd4;
+  --color-neutral-400: #8098b8;
+  --color-neutral-500: #60789c;
+  --color-neutral-600: #3a5070;
+  --color-neutral-700: #2a3d59;
+  --color-neutral-800: #192940;
+  --color-neutral-900: #0b1526;
+  --color-neutral-950: #040a14;
+}
+
+/*
+  Semantic design tokens. These are the single source of truth for the
+  navy + gold design system. Toolbar overlays (styled-components outside
+  the Tailwind theme) reference these via var(--token).
+
+  Canvas     -> deep navy (#0b1526) on #040a14
+  Surface    -> slightly lighter navy (#192940) for cards/inputs
+  Accent     -> gold #D4A843, used sparingly for primary actions/active states
+  Text       -> near-white primary, muted blue-gray secondary
+  Status     -> green (success) and red (error) only
+*/
+:root {
+  --nc-canvas: #040a14;
+  --nc-surface: #0b1526;
+  --nc-surface-2: #192940;
+  --nc-border: #2a3d59;
+  --nc-gold: #D4A843;
+  --nc-gold-bright: #E8C454;
+  --nc-gold-dark: #A67A1E;
+  --nc-text: #f0f4fa;
+  --nc-text-muted: #a8bcd4;
+  --nc-text-faint: #8098b8;
+  --nc-success: #16a34a;
+  --nc-danger: #dc2626;
+}
+
+.dark {
+  --nc-canvas: #040a14;
+  --nc-surface: #0b1526;
+  --nc-surface-2: #192940;
+  --nc-border: #2a3d59;
+  --nc-gold: #D4A843;
+  --nc-gold-bright: #E8C454;
+  --nc-gold-dark: #A67A1E;
+  --nc-text: #f0f4fa;
+  --nc-text-muted: #a8bcd4;
+  --nc-text-faint: #8098b8;
+  --nc-success: #16a34a;
+  --nc-danger: #dc2626;
+}
+
+/*
+  The default border color has changed to `currentColor` in Tailwind CSS v4,
+  so we've added these compatibility styles to make sure everything still
+  looks the same as it did with Tailwind CSS v3.
+
+  If we ever want to remove these styles, we need to add an explicit border
+  color utility to any element that depends on these defaults.
+*/
+@layer base {
+  *,
+  ::after,
+  ::before,
+  ::backdrop,
+  ::file-selector-button {
+    @apply border-neutral-300 dark:border-neutral-400;
+  }
+
+  /* Override scrollbar styles */
+  *,
+  ::after,
+  ::before {
+    @apply /* Applied Styles */
+    [&::-webkit-scrollbar]:w-2
+    [&::-webkit-scrollbar]:h-2
+    [&::-webkit-scrollbar-track]:bg-neutral-100
+    [&::-webkit-scrollbar-thumb]:bg-neutral-300
+    dark:[&::-webkit-scrollbar-track]:bg-neutral-800
+    dark:[&::-webkit-scrollbar-thumb]:bg-neutral-600;
+  }
+
+  /* Set cursor to pointer for all buttons and elements with role="button" */
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    @apply cursor-pointer;
+  }
+}
+
+/* Override injected styles */
+html {
+  @apply bg-nile-gold-50 dark:bg-neutral-950;
+}
+
+body {
+  @apply font-sans text-xs bg-gradient-to-b from-nile-gold-50 to-nile-gold-100 dark:from-neutral-900 dark:to-neutral-950;
+  background-attachment: fixed;
+}

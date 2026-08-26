@@ -1,0 +1,9 @@
+node_modules/
+app/
+dist/
+.vite/
+*.log
+vault.json
+.claude/
+_preview.html
+app-preview/
