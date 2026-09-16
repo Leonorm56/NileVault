@@ -7,3 +7,10 @@ vault.json
 .claude/
 _preview.html
 app-preview/
+
+# Generated test bundles (esbuild output).
+tests/.build/
+
+build/
+proc/
+temp-asar/

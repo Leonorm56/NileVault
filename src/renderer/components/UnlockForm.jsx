@@ -1,86 +1,113 @@
+import { useCallback, useState } from "react";
+import { useMutation } from "@tanstack/react-query";
+import { HiOutlineKey } from "react-icons/hi2";
+
 import Button from "./Button";
+import Field from "./Field";
 import PasswordInput from "./PasswordInput";
 import nileWalletClient from "@/lib/nileWalletClient";
 import toast from "react-hot-toast";
-import { cn } from "@/utils";
-import { useCallback, useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-
-const CARD =
-  "border bg-white/70 dark:bg-white/[0.06] backdrop-blur-md shadow-sm rounded-xl";
 
 /**
  * Vault unlock / passphrase form.
  *
- * Extracted from NileWallet.jsx so both the in-wallet locked banner and the
- * app-level Unlock screen render the same control. When `configured` is false
- * it doubles as the "set a passphrase" step (with a confirm field).
+ * Shared by the in-wallet locked banner and the app-level Unlock screen. When
+ * `configured` is false it doubles as the "set a passphrase" step (with a
+ * confirm field).
+ *
+ * Mismatched confirmation is now reported inline as you type rather than as a
+ * toast after you submit, and the submit button shows a spinner while scrypt
+ * runs (it is deliberately slow, which previously looked like a frozen button).
  */
 export default function UnlockForm({ configured, submitLabel, onUnlocked, busy }) {
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [error, setError] = useState("");
 
   const unlockMutation = useMutation({
     mutationFn: (pass) => nileWalletClient.unlock(pass),
   });
 
+  const mismatch = !configured && confirm.length > 0 && password !== confirm;
+  const canSubmit =
+    password.length > 0 && (configured || (confirm.length > 0 && !mismatch));
+
   const submit = useCallback(
-    (ev) => {
-      ev.preventDefault();
-      if (!password) return;
-      if (!configured && password !== confirm) {
-        toast.error("Passphrases do not match");
-        return;
-      }
+    (event) => {
+      event.preventDefault();
+      if (!canSubmit || unlockMutation.isPending) return;
+      setError("");
       unlockMutation
         .mutateAsync(password)
         .then(() => {
           setPassword("");
           setConfirm("");
+          toast.success(configured ? "Vault unlocked" : "Vault created");
           onUnlocked?.();
         })
-        .catch((error) => {
-          toast.error(
-            error?.code === "bad-passphrase"
+        .catch((failure) => {
+          setPassword("");
+          setConfirm("");
+          const message =
+            failure?.code === "bad-passphrase"
               ? "Wrong passphrase"
-              : error?.message || "Failed to unlock",
-          );
+              : failure?.message || "Failed to unlock";
+          setError(message);
+          toast.error(message);
         });
     },
-    [password, confirm, configured, unlockMutation, onUnlocked],
+    [password, canSubmit, configured, unlockMutation, onUnlocked],
   );
 
-  const pending = busy || unlockMutation.isPending;
+  const pending = Boolean(busy) || unlockMutation.isPending;
 
   return (
-    <form onSubmit={submit} className={cn(CARD, "flex flex-col gap-2 p-4")}>
-      <h3 className="font-bold">
-        {configured ? "Unlock NileWallet" : "Set a vault passphrase"}
-      </h3>
-      <p className="text-sm text-neutral-500 dark:text-neutral-400">
+    <form onSubmit={submit} className="nc-card nc-stack p-4">
+      <div className="flex items-center gap-2">
+        <HiOutlineKey className="size-4 text-nile-gold-500" />
+        <h3 className="font-bold">
+          {configured ? "Unlock NileVault" : "Set a vault passphrase"}
+        </h3>
+      </div>
+
+      <p className="nc-caption leading-relaxed">
         {configured
           ? "Enter your vault passphrase to continue."
           : "One passphrase secures every wallet on this device. It is never stored — you'll re-enter it after NileVault restarts."}
       </p>
 
-      <PasswordInput
-        autoFocus
-        value={password}
-        placeholder="Vault passphrase"
-        onChange={(e) => setPassword(e.target.value)}
-        disabled={pending}
-      />
-      {!configured ? (
+      <Field label="Vault passphrase" error={error}>
         <PasswordInput
-          value={confirm}
-          placeholder="Confirm passphrase"
-          onChange={(e) => setConfirm(e.target.value)}
+          autoFocus
+          value={password}
+          placeholder="Vault passphrase"
+          onChange={(event) => {
+            setPassword(event.target.value);
+            if (error) setError("");
+          }}
           disabled={pending}
+          invalid={Boolean(error)}
         />
+      </Field>
+
+      {!configured ? (
+        <Field
+          label="Confirm passphrase"
+          error={mismatch ? "Passphrases do not match" : ""}
+          success={!mismatch && confirm.length > 0 ? "Passphrases match" : ""}
+        >
+          <PasswordInput
+            value={confirm}
+            placeholder="Confirm passphrase"
+            onChange={(event) => setConfirm(event.target.value)}
+            disabled={pending}
+            invalid={mismatch}
+          />
+        </Field>
       ) : null}
 
-      <Button type="submit" disabled={pending || !password}>
-        {pending ? "Please wait…" : submitLabel || "Unlock"}
+      <Button type="submit" size="block" loading={pending} disabled={!canSubmit}>
+        {configured ? submitLabel || "Unlock" : "Set passphrase"}
       </Button>
     </form>
   );

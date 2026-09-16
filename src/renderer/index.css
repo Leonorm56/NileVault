@@ -2,6 +2,11 @@
 
 @import "tailwindcss";
 
+/* Tailwind v4 respects .gitignore, which contains "app/" for the Vite output
+   dir. That also matches src/renderer/app/ — so none of the utility classes
+   used only in NileWallet.jsx are emitted. Override: */
+@source "./app/";
+
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
@@ -14,33 +19,32 @@
 
   /*
     Design system — deep navy canvas, gold accents only.
-    The neutral scale below is the navy family: every shade carries a
-    blue undertone so the UI never falls into plain gray or black.
+    The neutral scale is the navy family: every shade carries a blue
+    undertone so the UI never falls into plain grey or black.
   */
   --color-nile-gold-50: #fefcf3;
   --color-nile-gold-100: #fdf6e0;
   --color-nile-gold-200: #fbe9b3;
   --color-nile-gold-300: #f8db80;
-  --color-nile-gold-400: #E8C454;
-  --color-nile-gold-500: #D4A843;
-  --color-nile-gold-600: #C99A36;
-  --color-nile-gold-700: #BF8E2A;
-  --color-nile-gold-800: #A67A1E;
-  --color-nile-gold-900: #8A6615;
-  --color-nile-gold-950: #6B4F0E;
-  --color-nile-gold: #D4A843;
+  --color-nile-gold-400: #e8c454;
+  --color-nile-gold-500: #d4a843;
+  --color-nile-gold-600: #c99a36;
+  --color-nile-gold-700: #bf8e2a;
+  --color-nile-gold-800: #a67a1e;
+  --color-nile-gold-900: #8a6615;
+  --color-nile-gold-950: #6b4f0e;
+  --color-nile-gold: #d4a843;
 
   --color-nile-100: #fdf6e0;
   --color-nile-200: #fbe9b3;
   --color-nile-300: #f8db80;
-  --color-nile-400: #E8C454;
-  --color-nile-500: #D4A843;
-  --color-nile-600: #C99A36;
-  --color-nile-700: #BF8E2A;
-  --color-nile-800: #A67A1E;
-  --color-nile-900: #8A6615;
-  --color-nile-950: #6B4F0E;
-  --color-nile: #D4A843;
+  --color-nile-400: #e8c454;
+  --color-nile-500: #d4a843;
+  --color-nile-600: #c99a36;
+  --color-nile-700: #bf8e2a;
+  --color-nile-800: #a67a1e;
+  --color-nile-900: #8a6615;
+  --color-nile-950: #6b4f0e;
 
   --color-neutral-50: #f0f4fa;
   --color-neutral-100: #dee6f0;
@@ -55,90 +59,451 @@
   --color-neutral-950: #040a14;
 }
 
-/*
-  Semantic design tokens. These are the single source of truth for the
-  navy + gold design system. Toolbar overlays (styled-components outside
-  the Tailwind theme) reference these via var(--token).
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Semantic tokens — the single source of truth for the navy + gold system.   */
+/* ────────────────────────────────────────────────────────────────────────── */
 
-  Canvas     -> deep navy (#0b1526) on #040a14
-  Surface    -> slightly lighter navy (#192940) for cards/inputs
-  Accent     -> gold #D4A843, used sparingly for primary actions/active states
-  Text       -> near-white primary, muted blue-gray secondary
-  Status     -> green (success) and red (error) only
-*/
 :root {
+  color-scheme: dark;
+
   --nc-canvas: #040a14;
   --nc-surface: #0b1526;
   --nc-surface-2: #192940;
   --nc-border: #2a3d59;
-  --nc-gold: #D4A843;
-  --nc-gold-bright: #E8C454;
-  --nc-gold-dark: #A67A1E;
+  --nc-gold: #d4a843;
+  --nc-gold-bright: #e8c454;
+  --nc-gold-dark: #a67a1e;
   --nc-text: #f0f4fa;
   --nc-text-muted: #a8bcd4;
   --nc-text-faint: #8098b8;
-  --nc-success: #16a34a;
-  --nc-danger: #dc2626;
+  --nc-success: #3ecf8e;
+  --nc-danger: #e5484d;
+
+  /*
+    Grid system — 8px base. Every measurement derives from this.
+  */
+  --nc-unit: 8px;
+  --nc-gap-xs: 4px;
+  --nc-gap-sm: 8px;
+  --nc-gap: 16px;
+  --nc-gap-lg: 24px;
+  --nc-gap-xl: 32px;
+  --nc-pad-sm: 12px;
+  --nc-pad: 16px;
+  --nc-pad-lg: 24px;
+  --nc-radius-sm: 8px;
+  --nc-radius: 12px;
+  --nc-radius-lg: 16px;
+
+  /*
+    Motion tokens. Every transition and animation reads these so the whole app
+    moves at one tempo, and the reduced-motion block below can neutralise all of
+    it in one place.
+  */
+  --nc-dur-fast: 120ms;
+  --nc-dur: 170ms;
+  --nc-dur-slow: 260ms;
+  --nc-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --nc-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Wallet grid: single column by default, 2 columns at lg breakpoint. */
+  --wallet-grid: 1fr;
+
+  /* Elevation. */
+  --nc-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
+  --nc-shadow-lift: 0 8px 24px -8px rgb(0 0 0 / 0.6);
 }
 
-.dark {
-  --nc-canvas: #040a14;
-  --nc-surface: #0b1526;
-  --nc-surface-2: #192940;
-  --nc-border: #2a3d59;
-  --nc-gold: #D4A843;
-  --nc-gold-bright: #E8C454;
-  --nc-gold-dark: #A67A1E;
-  --nc-text: #f0f4fa;
-  --nc-text-muted: #a8bcd4;
-  --nc-text-faint: #8098b8;
-  --nc-success: #16a34a;
-  --nc-danger: #dc2626;
-}
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Base                                                                       */
+/* ────────────────────────────────────────────────────────────────────────── */
 
-/*
-  The default border color has changed to `currentColor` in Tailwind CSS v4,
-  so we've added these compatibility styles to make sure everything still
-  looks the same as it did with Tailwind CSS v3.
-
-  If we ever want to remove these styles, we need to add an explicit border
-  color utility to any element that depends on these defaults.
-*/
 @layer base {
+  /* Tailwind v4 changed the default border colour to currentColor; keep the
+     v3 default so a plain `border` reads as a hairline on the navy surfaces. */
   *,
   ::after,
   ::before,
   ::backdrop,
   ::file-selector-button {
-    @apply border-neutral-300 dark:border-neutral-400;
+    border-color: var(--nc-border);
   }
 
-  /* Override scrollbar styles */
-  *,
-  ::after,
-  ::before {
-    @apply /* Applied Styles */
-    [&::-webkit-scrollbar]:w-2
-    [&::-webkit-scrollbar]:h-2
-    [&::-webkit-scrollbar-track]:bg-neutral-100
-    [&::-webkit-scrollbar-thumb]:bg-neutral-300
-    dark:[&::-webkit-scrollbar-track]:bg-neutral-800
-    dark:[&::-webkit-scrollbar-thumb]:bg-neutral-600;
+  html {
+    @apply bg-neutral-950;
+    height: 100%;
   }
 
-  /* Set cursor to pointer for all buttons and elements with role="button" */
+  body {
+    @apply font-sans text-neutral-100 bg-neutral-950;
+    height: 100%;
+    /*
+      A single fixed wash behind everything gives the flat navy canvas a little
+      depth without introducing any colour outside the palette.
+    */
+    background-image:
+      radial-gradient(
+        ellipse 90% 60% at 50% -10%,
+        rgb(25 41 64 / 0.9),
+        transparent 70%
+      ),
+      radial-gradient(
+        ellipse 70% 50% at 110% 100%,
+        rgb(212 168 67 / 0.06),
+        transparent 70%
+      );
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #root {
+    height: 100%;
+  }
+
+  /* One visible focus treatment for every interactive element. */
+  :focus-visible {
+    outline: 2px solid var(--nc-gold-bright);
+    outline-offset: 2px;
+    border-radius: 0.5rem;
+  }
+
   button:not(:disabled),
   [role="button"]:not(:disabled) {
-    @apply cursor-pointer;
+    cursor: pointer;
+  }
+
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  /* Scrollbars sized to the navy surfaces. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--nc-border) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--nc-border);
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--nc-text-faint);
+  }
+
+  /* Text the user may legitimately want to select (addresses, hashes, phrases)
+     opts back in; the shell itself does not select on drag. */
+  body {
+    user-select: none;
+  }
+  input,
+  textarea,
+  [data-selectable] {
+    user-select: text;
   }
 }
 
-/* Override injected styles */
-html {
-  @apply bg-nile-gold-50 dark:bg-neutral-950;
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Component primitives — type scale, surface vocabulary, card hierarchy      */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+@layer components {
+  /* ── Type scale ──────────────────────────────────────────────────────── */
+
+  /* Balance numbers — the dominant element on every screen. */
+  .nc-balance {
+    font-size: 2rem;
+    line-height: 2.5rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+  }
+
+  /* Display — section hero numbers. */
+  .nc-display {
+    @apply text-3xl font-bold tabular-nums tracking-tight;
+  }
+
+  /* Title — section headings. */
+  .nc-title {
+    @apply font-turret-road text-xl font-bold text-nile-gold-500;
+  }
+
+  /* Section — uppercase labels. */
+  .nc-section {
+    @apply text-xs font-bold uppercase tracking-wider text-neutral-400;
+  }
+
+  /* Label — field labels. */
+  .nc-label {
+    @apply text-xs font-bold text-neutral-400;
+  }
+
+  /* Caption — hints, secondary text. */
+  .nc-caption {
+    @apply text-xs text-neutral-400;
+  }
+
+  /* Body — descriptions, prose. */
+  .nc-body {
+    @apply text-sm text-neutral-300;
+  }
+
+  /* Mono — addresses, hashes, machine-readable values. */
+  .nc-mono {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Num — inline numbers. */
+  .nc-num {
+    font-size: 14px;
+    line-height: 18px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /*
+    A TON address is unbroken base64: no spaces, and often no hyphen either,
+    which leaves the normal line-breaking rules nothing to use — a 48-character
+    address then overflows its card and its tail becomes unreadable.
+  */
+  .nc-address {
+    overflow-wrap: anywhere;
+    word-break: break-all;
+  }
+
+  /* ── Card hierarchy ──────────────────────────────────────────────────── */
+
+  /*
+    Level 0 — Hero: balance displays, total balance.
+    Gold gradient overlay, no hard border, generous padding.
+  */
+  .nc-card-hero {
+    position: relative;
+    overflow: hidden;
+    border-radius: var(--nc-radius-lg);
+    padding: var(--nc-pad-lg);
+    text-align: center;
+  }
+
+  /*
+    Level 1 — Primary: send form, confirm dialog, main interactive surfaces.
+    Glass surface with standard border.
+  */
+  .nc-card {
+    border-radius: var(--nc-radius);
+    border: 1px solid rgb(255 255 255 / 0.1);
+    background: rgb(255 255 255 / 0.04);
+    backdrop-filter: blur(12px);
+    padding: var(--nc-pad);
+    box-shadow: var(--nc-shadow);
+  }
+
+  /*
+    Level 2 — Secondary: tokens, backup, connect, settings.
+    Dimmer glass, tighter padding.
+  */
+  .nc-card-secondary {
+    border-radius: var(--nc-radius);
+    border: 1px solid rgb(255 255 255 / 0.08);
+    background: rgb(255 255 255 / 0.025);
+    padding: var(--nc-pad-sm);
+    box-shadow: var(--nc-shadow);
+  }
+
+  /*
+    Level 3 — Destructive: danger zone, reveal seed, remove wallet.
+    Solid dark with red tint, no glass blur, heavier border.
+  */
+  .nc-card-danger {
+    border-radius: var(--nc-radius);
+    border: 1px solid rgb(239 68 68 / 0.25);
+    background: rgb(239 68 68 / 0.06);
+    padding: var(--nc-pad);
+  }
+
+  /* Interactive surface: the glass card plus the shared lift + press response. */
+  .nc-card-interactive {
+    border-radius: var(--nc-radius);
+    border: 1px solid rgb(255 255 255 / 0.1);
+    background: rgb(255 255 255 / 0.04);
+    backdrop-filter: blur(12px);
+    box-shadow: var(--nc-shadow);
+    transition:
+      border-color var(--nc-dur) var(--nc-ease),
+      background-color var(--nc-dur) var(--nc-ease),
+      transform var(--nc-dur-fast) var(--nc-ease),
+      box-shadow var(--nc-dur) var(--nc-ease);
+  }
+  .nc-card-interactive:hover {
+    @apply border-nile-gold-500/50 bg-white/[0.06];
+    transform: translateY(-2px);
+    box-shadow: var(--nc-shadow-lift);
+  }
+  .nc-card-interactive:active {
+    transform: translateY(0) scale(0.985);
+    transition-duration: var(--nc-dur-fast);
+  }
+
+  /* Section stack rhythm. */
+  .nc-stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--nc-gap);
+  }
+
+  /* Inline status text (validation, errors). Reserves its own space so a
+     message appearing never reflows the card around it. */
+  .nc-message {
+    @apply text-xs;
+    min-height: 1rem;
+  }
 }
 
-body {
-  @apply font-sans text-xs bg-gradient-to-b from-nile-gold-50 to-nile-gold-100 dark:from-neutral-900 dark:to-neutral-950;
-  background-attachment: fixed;
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Motion                                                                     */
+/* ────────────────────────────────────────────────────────────────────────── */
+
+@keyframes nc-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes nc-rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes nc-scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+@keyframes nc-slide-left {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes nc-slide-right {
+  from {
+    opacity: 0;
+    transform: translateX(-14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes nc-shimmer {
+  from {
+    background-position: -200% 0;
+  }
+  to {
+    background-position: 200% 0;
+  }
+}
+
+@keyframes nc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes nc-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@utility nc-anim-fade {
+  animation: nc-fade-in var(--nc-dur) var(--nc-ease-out) both;
+}
+@utility nc-anim-rise {
+  animation: nc-rise-in var(--nc-dur-slow) var(--nc-ease-out) both;
+}
+@utility nc-anim-scale {
+  animation: nc-scale-in var(--nc-dur) var(--nc-ease-out) both;
+}
+@utility nc-anim-slide-left {
+  animation: nc-slide-left var(--nc-dur-slow) var(--nc-ease-out) both;
+}
+@utility nc-anim-slide-right {
+  animation: nc-slide-right var(--nc-dur-slow) var(--nc-ease-out) both;
+}
+
+/* Skeleton shimmer — used instead of blank text while data loads. */
+@utility nc-skeleton {
+  border-radius: 0.5rem;
+  background-image: linear-gradient(
+    90deg,
+    rgb(255 255 255 / 0.04) 0%,
+    rgb(255 255 255 / 0.09) 50%,
+    rgb(255 255 255 / 0.04) 100%
+  );
+  background-size: 200% 100%;
+  animation: nc-shimmer 1.4s linear infinite;
+}
+
+/*
+  Honour the OS "reduce motion" setting: animations collapse to a single frame
+  and transitions become instant, so nothing moves but every state change is
+  still visible.
+*/
+@media (min-width: 64rem) {
+  :root {
+    --wallet-grid: repeat(2, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --nc-dur-fast: 1ms;
+    --nc-dur: 1ms;
+    --nc-dur-slow: 1ms;
+  }
+
+  *,
+  ::before,
+  ::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
 }

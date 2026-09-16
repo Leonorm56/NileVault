@@ -1,4 +1,13 @@
-const { app, BrowserWindow, ipcMain, net, dialog, Menu } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  ipcMain,
+  net,
+  dialog,
+  Menu,
+  shell,
+  session,
+} = require("electron");
 const path = require("path");
 const fs = require("fs");
 
@@ -6,40 +15,92 @@ let mainWindow;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 480,
-    height: 720,
+    width: 1200,
+    height: 820,
+    minWidth: 420,
+    minHeight: 620,
     show: false,
     title: "NileVault",
-    icon: path.join(app.getAppPath(), "src/renderer/assets/images/nilevault-logo.jpg"),
+    icon: path.join(app.getAppPath(), "build", "icon.ico"),
     backgroundColor: "#040a14",
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
     },
   });
 
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.maximize();
-    mainWindow.show();
+  mainWindow.once("ready-to-show", () => mainWindow.show());
+
+  /*
+    External links open in the user's browser, and nothing may navigate the
+    wallet window away from its own document. Without this, a manifest URL or an
+    errant anchor could replace the wallet UI with remote content while the
+    vault is unlocked.
+  */
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
   });
 
-  mainWindow.webContents.on("before-input-event", (_event, input) => {
-    if (input.key === "F12" && input.type === "keyDown") {
-      mainWindow.webContents.toggleDevTools();
+  mainWindow.webContents.on("will-navigate", (event, url) => {
+    const current = mainWindow.webContents.getURL();
+    if (url !== current) {
+      event.preventDefault();
+      if (/^https?:/i.test(url)) shell.openExternal(url).catch(() => {});
     }
   });
+
+  // DevTools only in unpackaged runs.
+  if (!app.isPackaged) {
+    mainWindow.webContents.on("before-input-event", (_event, input) => {
+      if (input.key === "F12" && input.type === "keyDown") {
+        mainWindow.webContents.toggleDevTools();
+      }
+    });
+  }
 
   if (!app.isPackaged && process.env.VITE_DEV) {
     mainWindow.loadURL("http://localhost:5173");
   } else {
-    const distPath = path.join(app.getAppPath(), "app", "index.html");
-    mainWindow.loadFile(distPath);
+    mainWindow.loadFile(path.join(app.getAppPath(), "app", "index.html"));
   }
 }
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
+
+  /*
+    A Content-Security-Policy for the renderer: only local scripts, styles and
+    assets, plus the TON endpoints this wallet legitimately calls. Image sources
+    stay open because tracked jettons supply their own icons.
+  */
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const isDevServer = details.url.startsWith("http://localhost");
+    const policy = [
+      "default-src 'self'",
+      isDevServer ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'" : "script-src 'self'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' https:",
+      "object-src 'none'",
+      "base-uri 'none'",
+      "form-action 'none'",
+      "frame-ancestors 'none'",
+    ].join("; ");
+
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [policy],
+      },
+    });
+  });
+
   loadStore(); // run migration early
   createWindow();
 });
@@ -95,6 +156,7 @@ const STORE_PATH = path.join(app.getPath("userData"), "vault.json");
 const LEGACY_PATH = path.join(app.getPath("userData"), "vault.legacy.json");
 
 let store = null;
+let writePending = false;
 
 function loadStore() {
   if (store) return store;
@@ -134,8 +196,23 @@ function loadStore() {
   return store;
 }
 
+/**
+ * Persist the store off the critical path.
+ *
+ * Every key write used to rewrite the whole JSON file synchronously, which now
+ * includes session maps and token lists alongside the encrypted seeds. Writes
+ * are coalesced into a microtask so a burst of sets costs one file write.
+ */
 function persist() {
-  fs.writeFileSync(STORE_PATH, JSON.stringify(store, null, 2));
+  if (writePending) return;
+  writePending = true;
+  queueMicrotask(() => {
+    writePending = false;
+    const snapshot = JSON.stringify(store, null, 2);
+    fs.promises.writeFile(STORE_PATH, snapshot).catch(() => {
+      /* a failed write must not take the app down */
+    });
+  });
 }
 
 ipcMain.handle("kv-get", (_e, key) => {
@@ -182,6 +259,11 @@ ipcMain.handle("open-backup-file", async () => {
     properties: ["openFile"],
   });
   if (result.canceled || !result.filePaths?.length) return { canceled: true };
-  const content = fs.readFileSync(result.filePaths[0], "utf8");
-  return { canceled: false, content };
+  const filePath = result.filePaths[0];
+  const content = fs.readFileSync(filePath, "utf8");
+  return {
+    canceled: false,
+    content,
+    fileName: path.basename(filePath),
+  };
 });

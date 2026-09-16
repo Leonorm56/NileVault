@@ -1,17 +1,18 @@
-import { cn } from "@/utils";
 import { Dialog } from "radix-ui";
 import { HiOutlineGlobeAlt, HiOutlineShieldCheck } from "react-icons/hi2";
+
+import Button from "./Button";
+import { cn } from "@/utils";
+import { truncateAddress } from "@/lib/address.js";
 import NileVaultLogo from "@/assets/images/nilevault-logo.jpg";
 
 /**
- * NileWalletConnectModal
+ * NileWalletConnectModal — the TON Connect approval sheet.
  *
- * NileChain's own TON Connect approval screen. Visual layout is inspired by
- * MyTonWallet's connect sheet (dark surface, gold accent, app card, address
- * row, Approve/Reject) but is written fresh against NileChain's own theme —
- * no MyTonWallet code is reused.
- *
- * Presentational only: parent owns open state and the approve/reject actions.
+ * Presentational only: the parent owns open state and the approve/reject
+ * actions. Radix supplies the focus trap and Esc handling; the styling uses the
+ * same surfaces, radius and motion tokens as every other dialog so the app has
+ * one dialog language rather than three.
  */
 export default function NileWalletConnectModal({
   open,
@@ -32,130 +33,103 @@ export default function NileWalletConnectModal({
     }
   })();
 
-  const wantsProof = (request?.items || []).some((i) => i.name === "ton_proof");
-  const truncated = address
-    ? `${address.slice(0, 6)}…${address.slice(-6)}`
-    : "";
+  const wantsProof = (request?.items || []).some((item) => item.name === "ton_proof");
+  const truncated = truncateAddress(address);
 
   return (
     <Dialog.Root open={open} onOpenChange={busy ? undefined : onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay
           className={cn(
-            "fixed inset-0 z-50",
-            "flex items-center justify-center",
-            "p-4 overflow-auto bg-black/70 backdrop-blur-sm",
+            "nc-anim-fade fixed inset-0 z-[60] flex items-center justify-center overflow-auto",
+            "bg-neutral-950/80 p-4 backdrop-blur-sm",
           )}
         >
           <Dialog.Content
-            onOpenAutoFocus={(ev) => ev.preventDefault()}
+            onOpenAutoFocus={(event) => event.preventDefault()}
             className={cn(
-              "my-auto flex flex-col w-full max-w-sm gap-4 p-5",
-              "rounded-2xl border border-nile-gold-500/30",
-              "bg-neutral-950 text-neutral-100 shadow-2xl",
+              "nc-anim-scale my-auto flex w-full max-w-sm flex-col gap-4 p-5",
+              "rounded-2xl border border-nile-gold-500/25 bg-neutral-900/95 shadow-2xl backdrop-blur-xl",
             )}
           >
-            {/* Header */}
             <div className="flex flex-col items-center gap-2 text-center">
-              <div
-                className={cn(
-                  "flex items-center justify-center size-14 rounded-full",
-                  "bg-nile-gold-500/10 border border-nile-gold-500/40",
-                )}
-              >
-                <img src={NileVaultLogo} className="size-8 rounded-lg" alt="NileVault" />
+              <div className="flex size-14 items-center justify-center rounded-full border border-nile-gold-500/40 bg-nile-gold-500/10">
+                <img
+                  src={NileVaultLogo}
+                  className="size-8 rounded-lg"
+                  alt="NileVault"
+                />
               </div>
-              <Dialog.Title className="text-lg font-bold text-nile-gold-400 font-turret-road">
+              <Dialog.Title className="nc-title text-lg">
                 Connect Wallet
               </Dialog.Title>
-              <Dialog.Description className="text-sm text-neutral-400">
+              <Dialog.Description className="nc-body text-center text-neutral-400">
                 A dApp wants to connect to your NileWallet.
               </Dialog.Description>
             </div>
 
             {/* Requesting app */}
-            <div
-              className={cn(
-                "flex items-center gap-3 p-3 rounded-xl",
-                "bg-white/[0.04] border border-white/10",
-              )}
-            >
+            <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
               {manifest.iconUrl ? (
                 <img
                   src={manifest.iconUrl}
-                  className="size-10 rounded-lg shrink-0 bg-white/10 object-cover"
+                  className="size-10 shrink-0 rounded-lg bg-white/10 object-cover"
                   alt={appName}
                 />
               ) : (
-                <div className="flex items-center justify-center size-10 rounded-lg shrink-0 bg-white/10">
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white/10">
                   <HiOutlineGlobeAlt className="size-5 text-neutral-300" />
                 </div>
               )}
-              <div className="flex flex-col min-w-0 grow">
-                <span className="font-bold truncate">{appName}</span>
-                <span className="text-xs text-neutral-400 truncate">
-                  {appHost}
-                </span>
+              <div className="flex min-w-0 grow flex-col">
+                <span className="truncate font-bold">{appName}</span>
+                <span className="nc-caption truncate">{appHost}</span>
               </div>
             </div>
 
             {/* Account row */}
-            <div
-              className={cn(
-                "flex items-center gap-3 p-3 rounded-xl",
-                "bg-white/[0.04] border border-white/10",
-              )}
-            >
-              <div className="flex items-center justify-center size-10 rounded-full shrink-0 bg-nile-gold-500/10 border border-nile-gold-500/30">
+            <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-full border border-nile-gold-500/30 bg-nile-gold-500/10">
                 <img src={NileVaultLogo} className="size-5 rounded-md" alt="" />
               </div>
-              <div className="flex flex-col min-w-0 grow">
-                <span className="text-xs text-neutral-400">
-                  Connecting as
-                </span>
-                <span className="font-mono font-bold truncate">
+              <div className="flex min-w-0 grow flex-col">
+                <span className="nc-caption">Connecting as</span>
+                <span
+                  data-selectable
+                  className="nc-mono truncate font-bold text-neutral-100"
+                >
                   {truncated || "—"}
                 </span>
               </div>
             </div>
 
-            {/* Proof notice */}
             {wantsProof ? (
               <div className="flex items-start gap-2 text-xs text-neutral-400">
-                <HiOutlineShieldCheck className="size-4 shrink-0 mt-0.5 text-nile-gold-400" />
+                <HiOutlineShieldCheck className="mt-0.5 size-4 shrink-0 text-nile-gold-400" />
                 <span>
-                  This app requests a signed proof of ownership. NileWallet will
-                  sign it with this account's key — no funds are moved.
+                  This app requests a signed proof of ownership. NileWallet signs
+                  it with this account's key — no funds move.
                 </span>
               </div>
             ) : null}
 
-            {/* Actions */}
             <div className="flex gap-2 pt-1">
-              <button
-                type="button"
-                disabled={busy}
+              <Button
+                variant="secondary"
+                size="block"
                 onClick={onReject}
-                className={cn(
-                  "grow px-4 py-3 rounded-xl font-bold",
-                  "bg-white/[0.06] border border-white/10",
-                  "hover:bg-white/[0.10] disabled:opacity-50",
-                )}
+                disabled={busy}
               >
                 Reject
-              </button>
-              <button
-                type="button"
-                disabled={busy || !address}
+              </Button>
+              <Button
+                size="block"
                 onClick={onApprove}
-                className={cn(
-                  "grow px-4 py-3 rounded-xl font-bold",
-                  "bg-nile-gold-500 text-neutral-950",
-                  "hover:bg-nile-gold-400 disabled:opacity-50",
-                )}
+                loading={busy}
+                disabled={busy || !address}
               >
-                {busy ? "Connecting…" : "Approve"}
-              </button>
+                Approve
+              </Button>
             </div>
           </Dialog.Content>
         </Dialog.Overlay>

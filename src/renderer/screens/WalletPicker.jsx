@@ -1,65 +1,80 @@
-import AddWalletModal from "@/components/AddWalletModal";
-import Container from "@/components/Container";
-import nileWalletClient from "@/lib/nileWalletClient";
-import toast from "react-hot-toast";
-import { cn } from "@/utils";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import toast from "react-hot-toast";
 import {
+  HiOutlineArrowDownTray,
   HiOutlineArrowPath,
+  HiOutlineArrowUpTray,
+  HiOutlineCheckCircle,
+  HiOutlineEllipsisHorizontal,
   HiOutlineMagnifyingGlass,
   HiOutlinePencilSquare,
   HiOutlinePlus,
   HiOutlineShieldCheck,
   HiOutlineTrash,
   HiOutlineXMark,
+  HiOutlineDocumentDuplicate,
 } from "react-icons/hi2";
+
+import AddWalletModal from "@/components/AddWalletModal";
+import Button from "@/components/Button";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import Container from "@/components/Container";
+import Field from "@/components/Field";
+import IconButton from "@/components/IconButton";
+import Input from "@/components/Input";
+import Modal from "@/components/Modal";
+import PasswordInput from "@/components/PasswordInput";
+import { Skeleton, SkeletonTiles } from "@/components/Skeleton";
+import AmountValue from "@/components/AmountValue";
+import nileWalletClient, { MIN_BACKUP_PASSWORD_LENGTH } from "@/lib/nileWalletClient";
+import { openTextFile, saveTextFile } from "@/lib/files.js";
+import { truncateAddress } from "@/lib/address.js";
+import { cn } from "@/utils";
 import TonCoinIcon from "@/assets/images/toncoin-ton-logo.svg";
 import NileVaultLogo from "@/assets/images/nilevault-logo.jpg";
 
-const CARD =
-  "border bg-white/70 dark:bg-white/[0.06] backdrop-blur-md shadow-sm rounded-xl";
+const EMPTY = [];
 
-function formatTon(n) {
-  return Number(n || 0)
-    .toFixed(4)
-    .replace(/\.?0+$/, "");
-}
+/** Stable string key for a list of ids, so query keys don't churn per render. */
+const keyOf = (ids) => ids.join(",");
 
-function formatTokenBalance(raw, decimals) {
-  try {
-    const value = BigInt(raw);
-    const divisor = 10n ** BigInt(decimals);
-    const whole = value / divisor;
-    const fraction = (value % divisor)
-      .toString()
-      .padStart(decimals, "0")
-      .replace(/0+$/, "");
-    return fraction ? `${whole}.${fraction}` : whole.toString();
-  } catch {
-    return "0";
-  }
-}
-
-function truncate(address) {
-  return address ? `${address.slice(0, 6)}…${address.slice(-6)}` : "—";
-}
-
-/** First-letter avatar colors based on first char of symbol. */
-const AVATAR_COLORS = [
-  "bg-nile-gold-500/15 text-nile-gold-600 border-nile-gold-500/30",
-  "bg-blue-500/15 text-blue-400 border-blue-500/30",
-  "bg-purple-500/15 text-purple-400 border-purple-500/30",
-  "bg-emerald-500/15 text-emerald-400 border-emerald-500/30",
-  "bg-rose-500/15 text-rose-400 border-rose-500/30",
-  "bg-cyan-500/15 text-cyan-400 border-cyan-500/30",
-  "bg-amber-500/15 text-amber-400 border-amber-500/30",
+/**
+ * Per-wallet accent.
+ *
+ * Every tile previously used the same logo on the same surface, so a grid of
+ * wallets was unreadable at a glance. The accent and monogram are derived from
+ * the wallet id and stay inside the navy/gold palette — no new hues.
+ */
+const ACCENTS = [
+  "border-nile-gold-500/40 bg-nile-gold-500/12 text-nile-gold-400",
+  "border-nile-gold-300/35 bg-nile-gold-300/10 text-nile-gold-300",
+  "border-neutral-300/30 bg-neutral-300/10 text-neutral-200",
+  "border-neutral-500/40 bg-neutral-500/12 text-neutral-300",
 ];
 
-function avatarColor(symbol) {
-  const ch = (symbol || "?").charCodeAt(0);
-  return AVATAR_COLORS[ch % AVATAR_COLORS.length];
+function hashString(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash;
 }
+
+const accentFor = (id) => ACCENTS[hashString(id) % ACCENTS.length];
+
+const monogramFor = (name) => {
+  const trimmed = String(name || "").trim();
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (!words.length) return "?";
+  // Purely numeric names (farming account IDs like "140", "188"): show the
+  // full number. It is short enough to fit the monogram box and avoids the
+  // confusing truncation ("140" → "14") that the old slice created.
+  if (words.length === 1 && /^\d+$/.test(words[0])) return words[0];
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+};
 
 export default function WalletPicker({ onSelect }) {
   const queryClient = useQueryClient();
@@ -70,31 +85,51 @@ export default function WalletPicker({ onSelect }) {
   const [showAddToken, setShowAddToken] = useState(false);
   const [contextMenu, setContextMenu] = useState(null);
   const [renameTarget, setRenameTarget] = useState(null);
-  const gridRef = useRef(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [removeTokenTarget, setRemoveTokenTarget] = useState(null);
+  const [openingId, setOpeningId] = useState(null);
+  const openTimerRef = useRef(0);
+
+  useEffect(() => () => clearTimeout(openTimerRef.current), []);
+
+  /* ── Data ─────────────────────────────────────────────────────────────── */
 
   const walletsQuery = useQuery({
     queryKey: ["nile-wallets"],
     queryFn: () => nileWalletClient.listWallets(),
   });
-  const wallets = Array.isArray(walletsQuery.data) ? walletsQuery.data : [];
+  const wallets = useMemo(
+    () => (Array.isArray(walletsQuery.data) ? walletsQuery.data : EMPTY),
+    [walletsQuery.data],
+  );
+  const walletIds = useMemo(() => wallets.map((wallet) => wallet.id), [wallets]);
 
   const detailsQuery = useQuery({
-    queryKey: ["nile-picker-details", wallets.map((w) => w.id)],
-    queryFn: async () =>
-      Promise.all(
-        wallets.map(async (w) => {
-          const info = await nileWalletClient.get(w.id).catch(() => null);
-          const address = info?.address || null;
-          let balance = null;
-          if (address) {
-            const res = await nileWalletClient.balance(w.id).catch(() => null);
-            balance = res && !res.error ? res.balance : null;
-          }
-          return { id: w.id, address, balance };
-        }),
-      ),
+    queryKey: ["nile-picker-details", keyOf(walletIds)],
+    queryFn: async () => {
+      /*
+       * One batched wallet-state request for the whole list instead of two
+       * requests per wallet (`get` for the address, `balance` for the number).
+       * The stack falls back to the per-wallet path when the index is
+       * unavailable, in which case this costs what it used to.
+       */
+      const rows = await nileWalletClient.walletOverview();
+      const byId = new Map(rows.map((row) => [row.id, row]));
+
+      return wallets.map((wallet) => {
+        const row = byId.get(wallet.id);
+        return {
+          id: wallet.id,
+          address: row?.address || null,
+          // `balanceNano` keeps the total exact — converting a decimal string
+          // back through Number would lose precision on large balances.
+          balanceNano: row?.balanceNano ?? null,
+          balanceError: row?.error || null,
+        };
+      });
+    },
     enabled: wallets.length > 0,
-    refetchInterval: 30_000,
+    refetchInterval: 45_000,
   });
 
   const detailsById = useMemo(() => {
@@ -103,98 +138,103 @@ export default function WalletPicker({ onSelect }) {
     return map;
   }, [detailsQuery.data]);
 
-  const total = useMemo(
-    () =>
-      (detailsQuery.data || []).reduce(
-        (sum, r) => sum + (parseFloat(r.balance) || 0),
-        0,
-      ),
-    [detailsQuery.data],
+  /** Total across every wallet, summed in base units so it stays exact. */
+  const totalNano = useMemo(() => {
+    let sum = 0n;
+    for (const row of detailsQuery.data || []) {
+      if (!row.balanceNano) continue;
+      try {
+        sum += BigInt(row.balanceNano);
+      } catch {
+        /* skip a malformed value rather than zeroing the whole total */
+      }
+    }
+    return sum;
+  }, [detailsQuery.data]);
+
+  const hasUnreadableBalance = (detailsQuery.data || []).some(
+    (row) => row.balanceError,
   );
 
-  /* ── Portfolio: discover all tokens across wallets, aggregate balances ── */
+  /* ── Portfolio ────────────────────────────────────────────────────────── */
 
   const portfolioTokensQuery = useQuery({
-    queryKey: ["nile-portfolio-tokens", wallets.map((w) => w.id)],
+    queryKey: ["nile-portfolio-tokens", keyOf(walletIds)],
     queryFn: async () => {
-      // Collect every token from every wallet, preserving first-added order.
-      const seen = new Map(); // jetton_master_address → token metadata
-      const walletsPerToken = new Map(); // jetton_master_address → [walletId]
+      const seen = new Map();
+      const walletsPerToken = new Map();
 
       await Promise.all(
-        wallets.map(async (w) => {
+        wallets.map(async (wallet) => {
           try {
-            const res = await nileWalletClient.listTokens(w.id);
-            const tokens = res?.tokens || [];
-            for (const t of tokens) {
-              const addr = t.jetton_master_address;
-              if (!seen.has(addr)) {
-                seen.set(addr, t);
-                walletsPerToken.set(addr, []);
+            const res = await nileWalletClient.listTokens(wallet.id);
+            for (const token of res?.tokens || []) {
+              const master = token.jetton_master_address;
+              if (!seen.has(master)) {
+                seen.set(master, token);
+                walletsPerToken.set(master, []);
               }
-              walletsPerToken.get(addr).push(w.id);
+              walletsPerToken.get(master).push(wallet.id);
             }
           } catch {
-            // wallet has no tokens or fetch failed — skip
+            /* this wallet has no tokens, or could not be read */
           }
         }),
       );
 
-      // Return deduplicated list, first-added order (Map preserves insertion).
-      return [...seen.values()].map((t) => ({
-        ...t,
-        walletIds: walletsPerToken.get(t.jetton_master_address) || [],
+      return [...seen.values()].map((token) => ({
+        ...token,
+        walletIds: walletsPerToken.get(token.jetton_master_address) || [],
       }));
     },
     enabled: wallets.length > 0,
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 
   const portfolioTokens = portfolioTokensQuery.data || [];
+  const portfolioMasters = useMemo(
+    () => portfolioTokens.map((token) => token.jetton_master_address),
+    [portfolioTokens],
+  );
 
-  // Fetch aggregated balances for each portfolio token across ALL wallets.
+  /**
+   * Aggregated balances, one request per wallet rather than one per token —
+   * tonapi returns every jetton balance for an account in a single response.
+   */
   const portfolioBalancesQuery = useQuery({
     queryKey: [
       "nile-portfolio-balances",
-      portfolioTokens.map((t) => t.jetton_master_address),
-      wallets.map((w) => w.id),
+      keyOf(portfolioMasters),
+      keyOf(walletIds),
     ],
     queryFn: async () => {
-      const allWalletIds = wallets.map((w) => w.id);
-      const results = {};
+      const balances = {};
+      let unreachable = false;
       await Promise.all(
-        portfolioTokens.map(async (t) => {
-          let sum = 0n;
-          for (const wid of allWalletIds) {
-            try {
-              const res = await nileWalletClient.tokenBalance(wid, t);
-              sum += BigInt(res?.balance || "0");
-            } catch {
-              // individual wallet balance failed — treat as 0
+        wallets.map(async (wallet) => {
+          try {
+            const res = await nileWalletClient.jettonBalances(wallet.id);
+            for (const [master, raw] of Object.entries(res?.balances || {})) {
+              balances[master] = (
+                BigInt(balances[master] || "0") + BigInt(raw || "0")
+              ).toString();
             }
+          } catch {
+            unreachable = true;
           }
-          results[t.jetton_master_address] = sum.toString();
         }),
       );
-      return results;
+      return { balances, unreachable };
     },
     enabled: portfolioTokens.length > 0,
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
   });
 
-  const portfolioBalances = portfolioBalancesQuery.data || {};
+  const portfolioBalances = portfolioBalancesQuery.data?.balances || {};
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return wallets;
-    return wallets.filter((w) => {
-      const detail = detailsById[w.id];
-      return (
-        w.name.toLowerCase().includes(q) ||
-        (detail?.address && detail.address.toLowerCase().includes(q))
-      );
-    });
-  }, [wallets, detailsById, search]);
+  /* ── Mutations ────────────────────────────────────────────────────────── */
 
   const deleteMutation = useMutation({
     mutationFn: (id) => nileWalletClient.deleteWallet(id),
@@ -203,8 +243,8 @@ export default function WalletPicker({ onSelect }) {
   const removeTokenMutation = useMutation({
     mutationFn: async ({ masterAddress }) => {
       await Promise.all(
-        wallets.map((w) =>
-          nileWalletClient.removeToken(w.id, masterAddress).catch(() => {}),
+        wallets.map((wallet) =>
+          nileWalletClient.removeToken(wallet.id, masterAddress).catch(() => {}),
         ),
       );
     },
@@ -214,27 +254,6 @@ export default function WalletPicker({ onSelect }) {
     mutationFn: ({ id, name }) => nileWalletClient.renameWallet(id, name),
   });
 
-  const remove = useCallback(
-    (wallet) => {
-      if (
-        !window.confirm(
-          `Remove "${wallet.name}"? This deletes its encrypted seed and TON Connect sessions. Make sure you've backed up the recovery phrase — this cannot be undone.`,
-        )
-      )
-        return;
-      deleteMutation
-        .mutateAsync(wallet.id)
-        .then(() => {
-          toast.success("Wallet removed");
-          queryClient.invalidateQueries({ queryKey: ["nile-wallets"] });
-        })
-        .catch((error) =>
-          toast.error(error?.message || "Failed to remove wallet"),
-        );
-    },
-    [deleteMutation, queryClient],
-  );
-
   const refreshAll = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ["nile-wallets"] });
     queryClient.invalidateQueries({ queryKey: ["nile-picker-details"] });
@@ -242,297 +261,449 @@ export default function WalletPicker({ onSelect }) {
     queryClient.invalidateQueries({ queryKey: ["nile-portfolio-balances"] });
   }, [queryClient]);
 
-  const removeToken = useCallback(
-    (token) => {
-      if (
-        !window.confirm(
-          `Remove "${token.symbol}" from all wallets?`,
-        )
-      )
-        return;
-      removeTokenMutation
-        .mutateAsync({ masterAddress: token.jetton_master_address })
-        .then(() => {
-          toast.success(`${token.symbol} removed`);
-          refreshAll();
-        })
-        .catch(() => toast.error("Failed to remove token"));
+  const confirmDelete = useCallback(() => {
+    const wallet = deleteTarget;
+    if (!wallet) return;
+    return deleteMutation
+      .mutateAsync(wallet.id)
+      .then(() => {
+        toast.success(`${wallet.name} removed`);
+        setDeleteTarget(null);
+        refreshAll();
+      })
+      .catch((error) => {
+        toast.error(error?.message || "Failed to remove wallet");
+      });
+  }, [deleteTarget, deleteMutation, refreshAll]);
+
+  const confirmRemoveToken = useCallback(() => {
+    const token = removeTokenTarget;
+    if (!token) return;
+    return removeTokenMutation
+      .mutateAsync({ masterAddress: token.jetton_master_address })
+      .then(() => {
+        toast.success(`${token.symbol} removed`);
+        setRemoveTokenTarget(null);
+        refreshAll();
+      })
+      .catch(() => toast.error("Failed to remove token"));
+  }, [removeTokenTarget, removeTokenMutation, refreshAll]);
+
+  const refreshBalances = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ["nile-picker-details"] });
+    queryClient.invalidateQueries({ queryKey: ["nile-portfolio-balances"] });
+  }, [queryClient]);
+
+  /* ── Interaction ──────────────────────────────────────────────────────── */
+
+  const filtered = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return wallets;
+    return wallets.filter((wallet) => {
+      const detail = detailsById[wallet.id];
+      return (
+        wallet.name.toLowerCase().includes(query) ||
+        (detail?.address && detail.address.toLowerCase().includes(query))
+      );
+    });
+  }, [wallets, detailsById, search]);
+
+  /**
+   * Open a wallet with a press handoff: the tile lifts and dims for a beat
+   * before the screen changes, so the tap has a visible consequence instead of
+   * the previous instantaneous swap.
+   */
+  const openWallet = useCallback(
+    (wallet) => {
+      if (openingId) return;
+      setOpeningId(wallet.id);
+      clearTimeout(openTimerRef.current);
+      openTimerRef.current = setTimeout(() => {
+        onSelect({ id: wallet.id, name: wallet.name });
+      }, 150);
     },
-    [removeTokenMutation, refreshAll],
+    [onSelect, openingId],
   );
 
-  const openContextMenu = useCallback((e, wallet) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setContextMenu({ x: e.clientX, y: e.clientY, wallet });
+  const openContextMenu = useCallback((event, wallet) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ x: event.clientX, y: event.clientY, wallet });
+  }, []);
+
+  /** Anchor the menu to a control (keyboard-reachable path for the same menu). */
+  const openContextMenuFromButton = useCallback((event, wallet) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    setContextMenu({ x: rect.right - 8, y: rect.bottom + 4, wallet });
   }, []);
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
   useEffect(() => {
-    if (!contextMenu) return;
-    const handler = () => closeContextMenu();
-    window.addEventListener("click", handler);
-    window.addEventListener("contextmenu", handler);
+    if (!contextMenu) return undefined;
+    const close = () => closeContextMenu();
+    const onKey = (event) => {
+      if (event.key === "Escape") closeContextMenu();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("contextmenu", close);
+    window.addEventListener("keydown", onKey);
     return () => {
-      window.removeEventListener("click", handler);
-      window.removeEventListener("contextmenu", handler);
+      window.removeEventListener("click", close);
+      window.removeEventListener("contextmenu", close);
+      window.removeEventListener("keydown", onKey);
     };
   }, [contextMenu, closeContextMenu]);
 
+  const hasWallets = wallets.length > 0;
+  const searching = search.trim().length > 0;
+
+  /* ── Render ───────────────────────────────────────────────────────────── */
+
   return (
-    <Container className="flex flex-col gap-4 max-w-[1440px]">
-      {/* Total-balance summary */}
-      <div
-        className={cn(
-          CARD,
-          "flex flex-col items-center gap-1 p-5 text-center",
-          "bg-gradient-to-b from-nile-gold-500/10 to-transparent",
-        )}
-      >
-        <span className="text-xs uppercase tracking-wide text-neutral-400">
-          Total Balance
-        </span>
-        <span className="text-3xl font-bold">
-          {detailsQuery.isLoading && wallets.length > 0
-            ? "…"
-            : `${formatTon(total)} TON`}
-        </span>
-        <span className="text-xs text-neutral-400">
-          {wallets.length} NileWallet{wallets.length === 1 ? "" : "s"}
-          <button
-            type="button"
-            onClick={refreshAll}
-            className="ml-2 inline-flex align-middle text-neutral-400 hover:text-nile-gold-500"
-            title="Refresh balances"
-          >
-            <HiOutlineArrowPath
-              className={cn(
-                "size-3.5",
-                detailsQuery.isFetching && "animate-spin",
-              )}
-            />
-          </button>
-        </span>
+    <Container size="xl" className="flex flex-col gap-3">
+      {/* Total balance */}
+      <div className="nc-card relative overflow-hidden p-4 text-center">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-x-0 -top-24 h-40 bg-[radial-gradient(ellipse_at_center,rgba(212,168,67,0.14),transparent_70%)]"
+        />
+        <div className="relative flex flex-col items-center gap-1">
+          <span className="nc-section">Total Balance</span>
+          <span className="nc-display text-nile-gold-400">
+            {detailsQuery.isLoading && hasWallets ? (
+              <Skeleton className="h-9 w-40" rounded="rounded-lg" />
+            ) : (
+              <AmountValue value={totalNano} suffix=" TON" />
+            )}
+          </span>
+          <span className="nc-caption flex items-center gap-1">
+            {hasWallets
+              ? `${wallets.length} wallet${wallets.length === 1 ? "" : "s"}`
+              : "No wallets yet"}
+            {hasUnreadableBalance ? (
+              <span
+                className="text-red-400"
+                title="One or more balances could not be read"
+              >
+                · some unavailable
+              </span>
+            ) : null}
+            <IconButton
+              label="Refresh balances"
+              onClick={refreshBalances}
+              loading={detailsQuery.isFetching}
+              size="size-6"
+              className="ml-1"
+            >
+              <HiOutlineArrowPath className="size-3.5" />
+            </IconButton>
+          </span>
+        </div>
       </div>
 
-      {/* Portfolio tokens row */}
-      {wallets.length > 0 && (
-        <div className={cn(CARD, "p-4")}>
-          <div className="flex items-center justify-between mb-3">
-            <h3 className="text-sm font-bold text-neutral-400 uppercase tracking-wide">
-              All Tokens
-            </h3>
-            <span className="text-xs text-neutral-500">
-              {portfolioTokens.length + 1} asset{portfolioTokens.length > 0 ? "s" : ""}
+      {/* Portfolio */}
+      {hasWallets ? (
+        <div className="nc-card p-3">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <h3 className="nc-section">All Tokens</h3>
+            <span className="nc-caption">
+              {portfolioTokens.length + 1} asset
+              {portfolioTokens.length > 0 ? "s" : ""}
             </span>
           </div>
-          <div className="flex gap-3 overflow-x-auto pb-1 -mx-1 px-1">
-            {/* TON card (always first) */}
-            <div
-              className={cn(
-                "flex flex-col gap-1 p-3 rounded-xl min-w-[120px] shrink-0",
-                "bg-white/50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/10",
-              )}
-            >
+
+          <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
+            <div className="flex min-w-[130px] shrink-0 flex-col gap-1 rounded-xl border border-nile-gold-500/25 bg-nile-gold-500/[0.06] p-3">
               <div className="flex items-center gap-2">
                 <img src={TonCoinIcon} className="size-5" alt="" />
                 <span className="text-sm font-bold">TON</span>
               </div>
               <span className="text-base font-bold text-nile-gold-500">
-                {detailsQuery.isLoading && wallets.length > 0
-                  ? "…"
-                  : `${formatTon(total)} TON`}
+                {detailsQuery.isLoading ? (
+                  <Skeleton className="h-5 w-20" />
+                ) : (
+                  <AmountValue value={totalNano} />
+                )}
               </span>
             </div>
 
-            {/* Discovered jetton tokens */}
-            {portfolioTokens.map((token) => {
-              const raw = portfolioBalances[token.jetton_master_address];
-              const isLoading = raw === undefined && portfolioBalancesQuery.isLoading;
-              return (
-                <div
-                  key={token.jetton_master_address}
-                  className={cn(
-                    "group relative flex flex-col gap-1 p-3 rounded-xl min-w-[120px] shrink-0",
-                    "bg-white/50 dark:bg-white/[0.04] border border-neutral-200 dark:border-white/10",
-                  )}
-                >
-                  <button
-                    type="button"
-                    onClick={() => removeToken(token)}
-                    className="absolute top-1.5 right-1.5 text-neutral-400 opacity-0 group-hover:opacity-100 hover:text-red-500"
-                    title={`Remove ${token.symbol}`}
+            {portfolioTokensQuery.isLoading && hasWallets
+              ? [0, 1].map((index) => (
+                  <div
+                    key={index}
+                    className="flex min-w-[130px] shrink-0 flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3"
                   >
-                    <HiOutlineXMark className="size-3.5" />
-                  </button>
-                  <div className="flex items-center gap-2">
-                    {token.icon_url ? (
-                      <img
-                        src={token.icon_url}
-                        className="size-5 rounded-full bg-white/10 object-cover"
-                        alt=""
-                      />
-                    ) : (
-                      <span
-                        className={cn(
-                          "inline-flex items-center justify-center size-5 rounded-full border text-[9px] font-bold",
-                          avatarColor(token.symbol),
-                        )}
-                      >
-                        {token.symbol?.slice(0, 2).toUpperCase() || "?"}
-                      </span>
-                    )}
-                    <span className="text-sm font-bold truncate">
-                      {token.symbol}
-                    </span>
+                    <Skeleton className="h-5 w-20" />
+                    <Skeleton className="h-5 w-24" />
                   </div>
-                  <span className="text-base font-bold text-nile-gold-500">
-                    {isLoading
-                      ? "…"
-                      : `${formatTokenBalance(raw || "0", token.decimals)} ${token.symbol}`}
-                  </span>
-                </div>
-              );
-            })}
+                ))
+              : portfolioTokens.map((token) => {
+                  const raw = portfolioBalances[token.jetton_master_address];
+                  const unreadable =
+                    raw === undefined &&
+                    portfolioBalancesQuery.data?.unreachable === true;
+                  return (
+                    <div
+                      key={token.jetton_master_address}
+                      className="group relative flex min-w-[130px] shrink-0 flex-col gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-3 transition-[border-color,background-color,transform] duration-[var(--nc-dur)] hover:-translate-y-0.5 hover:border-nile-gold-500/40 hover:bg-white/[0.06]"
+                    >
+                      <div className="absolute right-1.5 top-1.5 flex opacity-0 transition-opacity duration-[var(--nc-dur)] group-hover:opacity-100 focus-within:opacity-100">
+                        <IconButton
+                          label={`Remove ${token.symbol}`}
+                          variant="danger"
+                          size="size-5"
+                          onClick={() => setRemoveTokenTarget(token)}
+                        >
+                          <HiOutlineXMark className="size-3" />
+                        </IconButton>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {token.icon_url ? (
+                          <img
+                            src={token.icon_url}
+                            className="size-5 rounded-full bg-white/10 object-cover"
+                            alt=""
+                          />
+                        ) : (
+                          <span className="inline-flex size-5 items-center justify-center rounded-full border border-nile-gold-500/30 bg-nile-gold-500/10 text-[9px] font-bold text-nile-gold-500">
+                            {token.symbol?.slice(0, 2).toUpperCase() || "?"}
+                          </span>
+                        )}
+                        <span className="truncate text-sm font-bold">
+                          {token.symbol}
+                        </span>
+                      </div>
+                      <span className="text-base font-bold text-nile-gold-500">
+                        {portfolioBalancesQuery.isLoading && raw === undefined ? (
+                          <Skeleton className="h-5 w-24" />
+                        ) : raw === undefined ? (
+                          <span
+                            className="text-neutral-500"
+                            title={unreadable ? "Balance unavailable" : undefined}
+                          >
+                            —
+                          </span>
+                        ) : (
+                          <AmountValue
+                            value={raw}
+                            decimals={Number(token.decimals) || 9}
+                          />
+                        )}
+                      </span>
+                    </div>
+                  );
+                })}
 
-            {/* Add Token tile */}
             <button
               type="button"
               onClick={() => setShowAddToken(true)}
               className={cn(
-                "flex flex-col items-center justify-center gap-1 p-3 rounded-xl min-w-[120px] shrink-0",
-                "border border-dashed border-neutral-300 dark:border-white/15",
-                "text-neutral-400 hover:text-nile-gold-500 hover:border-nile-gold-500/50",
-                "transition-colors",
+                "flex min-w-[130px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl",
+                "border border-dashed border-white/15 p-3 text-neutral-400",
+                "transition-[border-color,color,background-color,transform] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
+                "hover:-translate-y-0.5 hover:border-nile-gold-500/60 hover:bg-nile-gold-500/[0.06] hover:text-nile-gold-400",
+                "active:translate-y-0 active:scale-[0.98]",
               )}
             >
               <HiOutlinePlus className="size-5" />
               <span className="text-xs font-bold">Add Token</span>
             </button>
           </div>
-        </div>
-      )}
 
-      {/* Search bar */}
-      {wallets.length > 1 && (
-        <div className="relative">
-          <HiOutlineMagnifyingGlass className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-neutral-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search wallets…"
-            className={cn(
-              "w-full rounded-xl border border-neutral-200 dark:border-white/10",
-              "bg-white/70 dark:bg-white/[0.06] backdrop-blur-md",
-              "pl-9 pr-9 py-2.5 text-sm",
-              "placeholder:text-neutral-400",
-              "outline-none focus:border-nile-gold-500/50",
-              "transition-colors",
-            )}
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => setSearch("")}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-neutral-600 dark:hover:text-neutral-300"
-            >
-              <HiOutlineXMark className="size-4" />
-            </button>
-          )}
+          {!portfolioTokensQuery.isLoading && portfolioTokens.length === 0 ? (
+            <p className="nc-caption mt-2">
+              No custom tokens tracked yet. Add a Jetton by its contract address
+              to watch its balance.
+            </p>
+          ) : null}
         </div>
-      )}
+      ) : null}
+
+      {/* Search */}
+      {wallets.length > 1 ? (
+        <div className="relative">
+          <HiOutlineMagnifyingGlass className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-neutral-500" />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search wallets by name or address…"
+            className="pl-10 pr-11"
+            aria-label="Search wallets"
+          />
+          {searching ? (
+            <div className="absolute right-1.5 top-1/2 -translate-y-1/2">
+              <IconButton label="Clear search" onClick={() => setSearch("")}>
+                <HiOutlineXMark className="size-4" />
+              </IconButton>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      {/* First-run empty state */}
+      {!walletsQuery.isLoading && !hasWallets ? (
+        <div className="nc-card nc-anim-rise flex flex-col items-center gap-3 p-8 text-center">
+          <img
+            src={NileVaultLogo}
+            className="size-16 rounded-2xl border border-white/10 shadow-lg"
+            alt=""
+          />
+          <h2 className="text-lg font-bold">Your vault is empty</h2>
+          <p className="nc-body max-w-sm text-neutral-400">
+            NileVault keeps every TON wallet you own encrypted on this device.
+            Create your first wallet — you can generate a new recovery phrase or
+            import an existing one inside it — or restore one from a backup file.
+          </p>
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button onClick={() => setShowAdd(true)}>
+              <HiOutlinePlus className="size-4" />
+              Create a wallet
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => setShowRestoreModal(true)}
+            >
+              <HiOutlineArrowUpTray className="size-4" />
+              Restore from backup
+            </Button>
+          </div>
+        </div>
+      ) : null}
 
       {/* Tiles */}
       {walletsQuery.isLoading ? (
-        <p className="text-center text-neutral-400">Loading wallets…</p>
-      ) : filtered.length === 0 && search ? (
-        <p className="text-center text-neutral-400 py-8">
-          No wallets match &quot;{search}&quot;
-        </p>
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-          {filtered.map((w) => {
-            const detail = detailsById[w.id];
+        <SkeletonTiles count={4} />
+      ) : null}
+
+      {!walletsQuery.isLoading && hasWallets && filtered.length === 0 && searching ? (
+        <div className="nc-card nc-anim-rise flex flex-col items-center gap-2 p-8 text-center">
+          <HiOutlineMagnifyingGlass className="size-6 text-neutral-500" />
+          <p className="nc-body text-neutral-400">
+            No wallets match &ldquo;{search}&rdquo;
+          </p>
+          <Button variant="link" size="sm" onClick={() => setSearch("")}>
+            Clear search
+          </Button>
+        </div>
+      ) : null}
+
+      {!walletsQuery.isLoading && hasWallets && filtered.length > 0 ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {filtered.map((wallet) => {
+            const detail = detailsById[wallet.id];
+            const opening = openingId === wallet.id;
             return (
-              <button
-                key={w.id}
-                type="button"
-                onClick={() => onSelect({ id: w.id, name: w.name })}
-                onContextMenu={(e) => openContextMenu(e, w)}
-                className={cn(
-                  CARD,
-                  "group relative flex flex-col gap-1 p-3.5 text-left",
-                  "hover:border-nile-gold-500/50 transition-colors",
-                )}
-              >
-                <img src={NileVaultLogo} className="size-7 rounded-lg shrink-0" alt="" />
-                <span className="font-bold text-sm truncate">{w.name}</span>
-                <span className="text-base font-bold text-nile-gold-500">
-                  {detail?.balance == null
-                    ? detailsQuery.isLoading
-                      ? "…"
-                      : "—"
-                    : `${formatTon(detail.balance)} TON`}
-                </span>
-                <span className="font-mono text-xs text-neutral-400 truncate">
-                  {truncate(detail?.address)}
-                </span>
-              </button>
+              <div key={wallet.id} className="group relative">
+                <button
+                  type="button"
+                  onClick={() => openWallet(wallet)}
+                  onContextMenu={(event) => openContextMenu(event, wallet)}
+                  aria-label={`Open ${wallet.name}`}
+                  className={cn(
+                    "nc-card-interactive flex min-h-[7rem] w-full flex-col gap-1 p-3 text-left",
+                    opening &&
+                      "border-nile-gold-500/70 bg-nile-gold-500/[0.07] opacity-80",
+                  )}
+                  style={opening ? { transform: "scale(0.97)" } : undefined}
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        "flex size-10 shrink-0 items-center justify-center rounded-xl border text-sm font-bold",
+                        accentFor(wallet.id),
+                      )}
+                    >
+                      {monogramFor(wallet.name)}
+                    </span>
+                    <span className="min-w-0 grow truncate text-sm font-bold">
+                      {wallet.name}
+                    </span>
+                  </div>
+
+                  <span className="text-base font-bold text-nile-gold-500">
+                    {detail?.balanceError ? (
+                      <span
+                        className="text-neutral-500"
+                        title={detail.balanceError}
+                      >
+                        —
+                      </span>
+                    ) : detail?.balanceNano == null ? (
+                      detailsQuery.isLoading ? (
+                        <Skeleton className="h-5 w-24" />
+                      ) : (
+                        "—"
+                      )
+                    ) : (
+                      <AmountValue value={detail.balanceNano} suffix=" TON" />
+                    )}
+                  </span>
+
+                  <span className="nc-mono mt-auto truncate text-neutral-500">
+                    {truncateAddress(detail?.address) || "—"}
+                  </span>
+                </button>
+
+                {/* Keyboard-reachable entry point for the same menu. */}
+                <div className="absolute right-2 top-2 opacity-0 transition-opacity duration-[var(--nc-dur)] group-hover:opacity-100 focus-within:opacity-100">
+                  <IconButton
+                    label={`Actions for ${wallet.name}`}
+                    size="size-7"
+                    onClick={(event) => openContextMenuFromButton(event, wallet)}
+                    className="bg-neutral-900/70 backdrop-blur-sm hover:bg-white/[0.12]"
+                  >
+                    <HiOutlineEllipsisHorizontal className="size-4" />
+                  </IconButton>
+                </div>
+              </div>
             );
           })}
 
-          {/* Add tile */}
           <button
             type="button"
             onClick={() => setShowAdd(true)}
             className={cn(
-              "flex flex-col items-center justify-center gap-2 p-3.5",
-              "border border-dashed border-neutral-300 dark:border-white/15 rounded-xl",
-              "text-neutral-400 hover:text-nile-gold-500 hover:border-nile-gold-500/50",
-              "min-h-[7.5rem] transition-colors",
+              "flex min-h-[7rem] flex-col items-center justify-center gap-2 rounded-xl",
+              "border border-dashed border-white/15 text-neutral-400",
+              "transition-[border-color,color,background-color,transform] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
+              "hover:-translate-y-0.5 hover:border-nile-gold-500/60 hover:bg-nile-gold-500/[0.06] hover:text-nile-gold-400",
+              "active:translate-y-0 active:scale-[0.98]",
             )}
           >
-            <HiOutlinePlus className="size-6" />
-            <span className="text-sm font-bold">Add Wallet</span>
+            <HiOutlinePlus className="size-5" />
+            <span className="text-xs font-bold">Add Wallet</span>
           </button>
         </div>
-      )}
+      ) : null}
 
-      {/* Vault actions row */}
-      <div className="flex gap-3">
-        <button
-          type="button"
-          onClick={() => setShowBackupModal(true)}
-          className={cn(
-            CARD,
-            "flex-1 flex items-center justify-center gap-2 py-3 px-4",
-            "text-sm font-bold text-neutral-400",
-            "hover:border-nile-gold-500/50 hover:text-nile-gold-500",
-            "transition-colors",
-          )}
-        >
-          <HiOutlineShieldCheck className="size-4" />
-          Backup Vault
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowRestoreModal(true)}
-          className={cn(
-            CARD,
-            "flex-1 flex items-center justify-center gap-2 py-3 px-4",
-            "text-sm font-bold text-neutral-400",
-            "hover:border-nile-gold-500/50 hover:text-nile-gold-500",
-            "transition-colors",
-          )}
-        >
-          <HiOutlineArrowPath className="size-4" />
-          Restore
-        </button>
-      </div>
+      {/* Vault actions */}
+      {hasWallets ? (
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowBackupModal(true)}
+            className="nc-card-interactive flex flex-1 items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold text-neutral-400 hover:text-nile-gold-400"
+          >
+            <HiOutlineShieldCheck className="size-4" />
+            Backup Vault
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowRestoreModal(true)}
+            className="nc-card-interactive flex flex-1 items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold text-neutral-400 hover:text-nile-gold-400"
+          >
+            <HiOutlineArrowUpTray className="size-4" />
+            Restore
+          </button>
+        </div>
+      ) : null}
 
-      {showAdd && (
+      {/* ── Dialogs ────────────────────────────────────────────────────── */}
+
+      {showAdd ? (
         <AddWalletModal
           onClose={() => setShowAdd(false)}
           onCreated={(wallet) => {
@@ -541,16 +712,16 @@ export default function WalletPicker({ onSelect }) {
             if (wallet?.id) onSelect({ id: wallet.id, name: wallet.name });
           }}
         />
-      )}
+      ) : null}
 
-      {showBackupModal && (
+      {showBackupModal ? (
         <VaultBackupModal
           onClose={() => setShowBackupModal(false)}
           walletCount={wallets.length}
         />
-      )}
+      ) : null}
 
-      {showRestoreModal && (
+      {showRestoreModal ? (
         <VaultRestoreModal
           onClose={() => setShowRestoreModal(false)}
           onRestored={() => {
@@ -558,9 +729,9 @@ export default function WalletPicker({ onSelect }) {
             refreshAll();
           }}
         />
-      )}
+      ) : null}
 
-      {showAddToken && (
+      {showAddToken ? (
         <AddTokenModal
           wallets={wallets}
           onClose={() => setShowAddToken(false)}
@@ -569,9 +740,9 @@ export default function WalletPicker({ onSelect }) {
             refreshAll();
           }}
         />
-      )}
+      ) : null}
 
-      {renameTarget && (
+      {renameTarget ? (
         <RenameWalletModal
           wallet={renameTarget}
           onClose={() => setRenameTarget(null)}
@@ -581,46 +752,92 @@ export default function WalletPicker({ onSelect }) {
           }}
           renameMutation={renameMutation}
         />
-      )}
+      ) : null}
+
+      <ConfirmDialog
+        open={Boolean(deleteTarget)}
+        title="Remove wallet"
+        tone="danger"
+        confirmLabel="Remove wallet"
+        busy={deleteMutation.isPending}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        description="This deletes the encrypted recovery phrase and every TON Connect session for this wallet. It cannot be undone."
+        detail={
+          deleteTarget ? (
+            <div className="flex items-center gap-2">
+              <span
+                className={cn(
+                  "flex size-8 shrink-0 items-center justify-center rounded-lg border text-[10px] font-bold",
+                  accentFor(deleteTarget.id),
+                )}
+              >
+                {monogramFor(deleteTarget.name)}
+              </span>
+              <span className="truncate text-sm font-bold">
+                {deleteTarget.name}
+              </span>
+            </div>
+          ) : null
+        }
+      />
+
+      <ConfirmDialog
+        open={Boolean(removeTokenTarget)}
+        title={`Remove ${removeTokenTarget?.symbol || "token"}`}
+        tone="danger"
+        confirmLabel="Remove token"
+        busy={removeTokenMutation.isPending}
+        onCancel={() => setRemoveTokenTarget(null)}
+        onConfirm={confirmRemoveToken}
+        description="It will stop being tracked in every wallet. The token itself is unaffected — you can add it again at any time."
+      />
 
       {/* Context menu */}
-      {contextMenu && (
+      {contextMenu ? (
         <div
-          className="fixed z-50 min-w-[160px] rounded-xl border border-neutral-200 dark:border-white/10 bg-white dark:bg-neutral-900 shadow-xl py-1"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={(e) => e.stopPropagation()}
+          role="menu"
+          aria-label={`Actions for ${contextMenu.wallet.name}`}
+          className="nc-anim-scale fixed z-[70] min-w-[170px] origin-top-left overflow-hidden rounded-xl border border-white/10 bg-neutral-900/95 py-1 shadow-2xl backdrop-blur-xl"
+          style={{
+            left: Math.min(contextMenu.x, window.innerWidth - 190),
+            top: Math.min(contextMenu.y, window.innerHeight - 100),
+          }}
+          onClick={(event) => event.stopPropagation()}
         >
           <button
             type="button"
+            role="menuitem"
             onClick={() => {
               closeContextMenu();
               setRenameTarget(contextMenu.wallet);
             }}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-left hover:bg-neutral-100 dark:hover:bg-white/[0.06]"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-[var(--nc-dur)] hover:bg-white/[0.08] active:bg-white/[0.12]"
           >
             <HiOutlinePencilSquare className="size-4 text-neutral-400" />
             Rename
           </button>
           <button
             type="button"
+            role="menuitem"
             onClick={() => {
               closeContextMenu();
-              remove(contextMenu.wallet);
+              setDeleteTarget(contextMenu.wallet);
             }}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-left hover:bg-neutral-100 dark:hover:bg-white/[0.06] text-red-500"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 transition-colors duration-[var(--nc-dur)] hover:bg-red-500/15 active:bg-red-500/25"
           >
             <HiOutlineTrash className="size-4" />
             Delete
           </button>
         </div>
-      )}
+      ) : null}
     </Container>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────── */
-/* AddTokenModal — pick a wallet + enter contract address               */
-/* ──────────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Add token                                                                  */
+/* ────────────────────────────────────────────────────────────────────────── */
 
 function AddTokenModal({ wallets, onClose, onAdded }) {
   const [selectedWallet, setSelectedWallet] = useState(wallets[0]?.id || "");
@@ -628,332 +845,525 @@ function AddTokenModal({ wallets, onClose, onAdded }) {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const add = async (e) => {
-    e.preventDefault();
-    if (!selectedWallet || !address.trim()) return;
+  const trimmed = address.trim();
+
+  const submit = async (event) => {
+    event.preventDefault();
+    if (!selectedWallet || !trimmed || loading) return;
     setLoading(true);
     setError("");
     try {
-      await nileWalletClient.addToken(selectedWallet, address.trim());
-      toast.success("Token added to wallet");
+      await nileWalletClient.addToken(selectedWallet, trimmed);
+      toast.success("Token added");
       onAdded();
     } catch (err) {
-      if (err?.message === "needs-unlock") {
-        toast.error("Unlock the vault first");
-      } else {
-        setError(err?.message || "Invalid token address");
-      }
+      const message =
+        err?.message === "needs-unlock"
+          ? "Unlock the vault first"
+          : err?.message || "Invalid token address";
+      setError(message);
+      if (err?.message === "needs-unlock") toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Modal onClose={onClose} title="Add Token">
-      <form onSubmit={add} className="flex flex-col gap-4">
-        <p className="text-sm text-neutral-400">
-          Add a Jetton by its master contract address. It will be tracked in the
-          selected wallet and appear in the portfolio.
-        </p>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-bold text-neutral-500">Wallet</span>
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!loading}
+      title="Add Token"
+      description="Track a Jetton by its master contract address. It appears in this vault's portfolio."
+      icon={<HiOutlinePlus className="size-4" />}
+    >
+      <form onSubmit={submit} className="nc-stack">
+        <Field label="Wallet">
           <select
             value={selectedWallet}
-            onChange={(e) => setSelectedWallet(e.target.value)}
-            className={INPUT}
+            onChange={(event) => setSelectedWallet(event.target.value)}
+            className={cn(
+              "w-full appearance-none rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2.5 text-sm",
+              "outline-none transition-[border-color,box-shadow] duration-[var(--nc-dur)]",
+              "focus:border-nile-gold-500/60 focus:ring-2 focus:ring-nile-gold-500/20",
+            )}
           >
-            {wallets.map((w) => (
-              <option key={w.id} value={w.id}>
-                {w.name}
+            {wallets.map((wallet) => (
+              <option key={wallet.id} value={wallet.id} className="bg-neutral-900">
+                {wallet.name}
               </option>
             ))}
           </select>
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-bold text-neutral-500">
-            Jetton Master Address
-          </span>
-          <input
-            type="text"
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-            placeholder="EQ…"
-            className={cn(INPUT, "font-mono")}
-            autoFocus
-          />
-        </label>
-        {error && <p className="text-xs text-red-500">{error}</p>}
-        <button
-          type="submit"
-          disabled={loading || !selectedWallet || !address.trim()}
-          className={cn(BTN_PRIMARY, (loading || !selectedWallet || !address.trim()) && "opacity-50 cursor-wait")}
+        </Field>
+
+        <Field
+          label="Jetton master address"
+          error={error}
+          hint="Starts with EQ… or UQ…"
         >
-          {loading ? "Adding…" : "Add Token"}
-        </button>
+          <Input
+            autoFocus
+            value={address}
+            onChange={(event) => {
+              setAddress(event.target.value);
+              if (error) setError("");
+            }}
+            placeholder="EQ…"
+            className="font-mono text-sm"
+            disabled={loading}
+            invalid={Boolean(error)}
+          />
+        </Field>
+
+        <div className="flex gap-2">
+          <Button
+            type="submit"
+            size="block"
+            loading={loading}
+            disabled={!selectedWallet || !trimmed}
+          >
+            Add Token
+          </Button>
+          <Button
+            variant="secondary"
+            size="block"
+            onClick={onClose}
+            disabled={loading}
+          >
+            Cancel
+          </Button>
+        </div>
       </form>
     </Modal>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────── */
-/* RenameWalletModal                                                     */
-/* ──────────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Rename                                                                     */
+/* ────────────────────────────────────────────────────────────────────────── */
 
 function RenameWalletModal({ wallet, onClose, onRenamed, renameMutation }) {
   const [name, setName] = useState(wallet.name);
+  const [error, setError] = useState("");
 
-  const submit = (e) => {
-    e.preventDefault();
-    if (!name.trim()) return;
+  const trimmed = name.trim();
+  const unchanged = trimmed === wallet.name;
+
+  const submit = (event) => {
+    event.preventDefault();
+    if (!trimmed || unchanged || renameMutation.isPending) return;
+    setError("");
     renameMutation
-      .mutateAsync({ id: wallet.id, name: name.trim() })
+      .mutateAsync({ id: wallet.id, name: trimmed })
       .then(() => {
         toast.success("Wallet renamed");
         onRenamed();
       })
-      .catch((err) => toast.error(err?.message || "Rename failed"));
+      .catch((err) => {
+        const message = err?.message || "Rename failed";
+        setError(message);
+        toast.error(message);
+      });
   };
 
   return (
-    <Modal onClose={onClose} title="Rename Wallet">
-      <form onSubmit={submit} className="flex flex-col gap-4">
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-bold text-neutral-500">Wallet Name</span>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={INPUT}
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!renameMutation.isPending}
+      title="Rename wallet"
+      size="max-w-sm"
+    >
+      <form onSubmit={submit} className="nc-stack">
+        <Field label="Wallet name" error={error}>
+          <Input
             autoFocus
+            value={name}
+            maxLength={42}
+            onChange={(event) => {
+              setName(event.target.value);
+              if (error) setError("");
+            }}
+            disabled={renameMutation.isPending}
+            invalid={Boolean(error)}
           />
-        </label>
-        <button
-          type="submit"
-          disabled={!name.trim() || renameMutation.isPending}
-          className={cn(BTN_PRIMARY, (!name.trim() || renameMutation.isPending) && "opacity-50 cursor-wait")}
-        >
-          {renameMutation.isPending ? "Renaming…" : "Rename"}
-        </button>
+        </Field>
+        <div className="flex gap-2">
+          <Button
+            type="submit"
+            size="block"
+            loading={renameMutation.isPending}
+            disabled={!trimmed || unchanged}
+          >
+            Rename
+          </Button>
+          <Button
+            variant="secondary"
+            size="block"
+            onClick={onClose}
+            disabled={renameMutation.isPending}
+          >
+            Cancel
+          </Button>
+        </div>
       </form>
     </Modal>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────── */
-/* VaultBackupModal                                                     */
-/* ──────────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Backup                                                                     */
+/* ────────────────────────────────────────────────────────────────────────── */
 
 function VaultBackupModal({ onClose, walletCount }) {
   const [passphrase, setPassphrase] = useState("");
   const [backupPass, setBackupPass] = useState("");
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const handleBackup = async (e) => {
-    e.preventDefault();
-    if (!passphrase) return toast.error("Vault passphrase required");
-    if (!backupPass) return toast.error("Backup password required");
-    if (backupPass.length < 8) return toast.error("Backup password must be at least 8 characters");
+  const tooShort =
+    backupPass.length > 0 && backupPass.length < MIN_BACKUP_PASSWORD_LENGTH;
+  const canSubmit =
+    passphrase.length > 0 && backupPass.length >= MIN_BACKUP_PASSWORD_LENGTH;
 
+  const handleBackup = async (event) => {
+    event.preventDefault();
+    if (!canSubmit || loading) return;
     setLoading(true);
+    setError("");
     try {
-      const result = await nileWalletClient.backup(passphrase);
-      const { filename, json } = result;
-      await window.nilevault.saveBackupFile({ defaultPath: filename, content: json });
-      toast.success(`Backup saved — ${result.count} wallet(s)`);
+      const result = await nileWalletClient.backup(passphrase, backupPass);
+      const saved = await saveTextFile({
+        defaultPath: result.filename,
+        content: result.json,
+      });
+      if (saved?.canceled) {
+        toast("Backup cancelled", { icon: "•" });
+      } else {
+        toast.success(`Backup saved — ${result.count} wallet(s)`);
+      }
       onClose();
     } catch (err) {
-      if (err?.code === "bad-passphrase") {
-        toast.error("Wrong vault passphrase");
-      } else {
-        toast.error(err?.message || "Backup failed");
-      }
+      const message =
+        err?.code === "bad-passphrase"
+          ? "Wrong vault passphrase"
+          : err?.message || "Backup failed";
+      setError(message);
+      if (err?.code === "bad-passphrase") toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Modal onClose={onClose} title="Backup Vault">
-      <form onSubmit={handleBackup} className="flex flex-col gap-4">
-        <p className="text-sm text-neutral-400">
-          Export all {walletCount} wallet(s) encrypted under a separate backup
-          password. The vault passphrase proves you own the wallets; the backup
-          password encrypts the exported file.
-        </p>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-bold text-neutral-500">Vault Passphrase</span>
-          <input
-            type="password"
-            value={passphrase}
-            onChange={(e) => setPassphrase(e.target.value)}
-            className={INPUT}
-            autoFocus
-          />
-        </label>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-bold text-neutral-500">Backup Password (min 8 chars)</span>
-          <input
-            type="password"
-            value={backupPass}
-            onChange={(e) => setBackupPass(e.target.value)}
-            className={INPUT}
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={loading}
-          className={cn(BTN_PRIMARY, loading && "opacity-50 cursor-wait")}
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!loading}
+      title="Backup vault"
+      description={`Exports all ${walletCount} wallet(s) to one encrypted file.`}
+      icon={<HiOutlineShieldCheck className="size-4" />}
+    >
+      <form onSubmit={handleBackup} className="nc-stack">
+        <Field
+          label="Vault passphrase"
+          hint="Proves you own this vault. It is not stored in the file."
+          error={error}
         >
-          {loading ? "Encrypting…" : "Save Backup"}
-        </button>
+          <PasswordInput
+            autoFocus
+            value={passphrase}
+            onChange={(event) => {
+              setPassphrase(event.target.value);
+              if (error) setError("");
+            }}
+            placeholder="Vault passphrase"
+            disabled={loading}
+            invalid={Boolean(error)}
+          />
+        </Field>
+
+        <Field
+          label="Backup password"
+          error={
+            tooShort
+              ? `Must be at least ${MIN_BACKUP_PASSWORD_LENGTH} characters`
+              : ""
+          }
+          hint={`Encrypts the file — you'll need it to restore, on any machine.`}
+          success={
+            backupPass.length >= MIN_BACKUP_PASSWORD_LENGTH
+              ? "Strong enough"
+              : ""
+          }
+        >
+          <PasswordInput
+            value={backupPass}
+            onChange={(event) => setBackupPass(event.target.value)}
+            placeholder={`At least ${MIN_BACKUP_PASSWORD_LENGTH} characters`}
+            disabled={loading}
+            invalid={tooShort}
+          />
+        </Field>
+
+        <div className="flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.06] p-3">
+          <HiOutlineShieldCheck className="mt-0.5 size-4 shrink-0 text-red-400" />
+          <p className="nc-caption leading-relaxed text-red-300/90">
+            Losing both this file and its password means permanent loss of funds.
+            There is no recovery path beyond that.
+          </p>
+        </div>
+
+        <div className="flex gap-2">
+          <Button
+            type="submit"
+            size="block"
+            loading={loading}
+            disabled={!canSubmit}
+          >
+            <HiOutlineArrowDownTray className="size-4" />
+            Save backup
+          </Button>
+          <Button
+            variant="secondary"
+            size="block"
+            onClick={onClose}
+            disabled={loading}
+          >
+            Cancel
+          </Button>
+        </div>
       </form>
     </Modal>
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────── */
-/* VaultRestoreModal                                                    */
-/* ──────────────────────────────────────────────────────────────────── */
+/* ────────────────────────────────────────────────────────────────────────── */
+/* Restore                                                                    */
+/* ────────────────────────────────────────────────────────────────────────── */
 
 function VaultRestoreModal({ onClose, onRestored }) {
-  const queryClient = useQueryClient();
-  const [backupPass, setBackupPass] = useState("");
-  const [json, setJson] = useState(null);
+  const [password, setPassword] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [json, setJson] = useState("");
   const [preview, setPreview] = useState(null);
+  const [overwrite, setOverwrite] = useState({});
+  const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const queryClient = useQueryClient();
 
   const pickFile = async () => {
-    const result = await window.nilevault.openBackupFile();
-    if (result.canceled) return;
-    setJson(result.content);
+    const result = await openTextFile({ title: "Select a NileVault backup" });
+    if (result?.canceled) return;
+    setJson(result.content || "");
+    setFileName(result.fileName || "backup.json");
     setPreview(null);
+    setOverwrite({});
+    setError("");
   };
 
-  const handlePreview = async (e) => {
-    e.preventDefault();
-    if (!json) return toast.error("Select a backup file first");
-    if (!backupPass) return toast.error("Backup password required");
-
+  const handlePreview = async (event) => {
+    event.preventDefault();
+    if (!json || !password || loading) return;
     setLoading(true);
+    setError("");
     try {
-      const res = await nileWalletClient.restorePreview(backupPass, json);
+      const res = await nileWalletClient.restorePreview(password, json);
       setPreview(res);
+      setOverwrite(
+        Object.fromEntries(
+          res.entries.filter((entry) => entry.exists).map((entry) => [entry.account_id, false]),
+        ),
+      );
     } catch (err) {
-      if (err?.code === "bad-passphrase") {
-        toast.error("Wrong backup password");
-      } else {
-        toast.error(err?.message || "Preview failed");
-      }
+      const message =
+        err?.code === "bad-passphrase"
+          ? "Wrong backup password"
+          : err?.message || "Preview failed";
+      setError(message);
+      if (err?.code === "bad-passphrase") toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
   const handleRestore = async () => {
+    if (!preview || loading) return;
     setLoading(true);
+    setError("");
     try {
-      const overwrite = {};
-      for (const entry of preview.entries) {
-        if (entry.exists) overwrite[entry.account_id] = true;
-      }
-      const res = await nileWalletClient.restoreApply(backupPass, json, overwrite);
-      toast.success(`Restored ${res.restored} wallet(s)`);
+      const res = await nileWalletClient.restoreApply(password, json, overwrite);
+      toast.success(
+        `Restored ${res.restored} wallet${res.restored === 1 ? "" : "s"}${
+          res.skipped ? ` · ${res.skipped} skipped` : ""
+        }`,
+      );
+      queryClient.invalidateQueries({ queryKey: ["nile-wallets"] });
       onRestored();
     } catch (err) {
-      toast.error(err?.message || "Restore failed");
+      const message = err?.message || "Restore failed";
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
   };
 
+  const overwriteCount = Object.values(overwrite).filter(Boolean).length;
+
   return (
-    <Modal onClose={onClose} title="Restore from Backup">
-      <form onSubmit={handlePreview} className="flex flex-col gap-4">
-        <p className="text-sm text-neutral-400">
-          Select a NileVault backup file and enter the backup password to
-          preview and restore wallets.
-        </p>
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!loading}
+      title="Restore from backup"
+      description="Select a backup file and enter the password it was encrypted with to preview it."
+      icon={<HiOutlineArrowUpTray className="size-4" />}
+      size="max-w-md"
+    >
+      <form onSubmit={handlePreview} className="nc-stack">
         <button
           type="button"
           onClick={pickFile}
-          className={cn(
-            CARD,
-            "w-full py-3 px-4 text-sm font-bold text-neutral-400",
-            "hover:border-nile-gold-500/50 hover:text-nile-gold-500",
-            "transition-colors",
-          )}
+          disabled={loading || Boolean(preview)}
+          className="nc-card-interactive flex w-full items-center gap-3 p-3 text-left disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {json ? "Backup file selected" : "Choose backup file…"}
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-nile-gold-500/30 bg-nile-gold-500/10 text-nile-gold-400">
+            <HiOutlineDocumentDuplicate className="size-4" />
+          </span>
+          <span className="min-w-0 grow">
+            <span className="block truncate text-sm font-bold">
+              {fileName || "Choose backup file…"}
+            </span>
+            <span className="nc-caption block">
+              {fileName ? "File selected" : "A .json file exported from NileVault"}
+            </span>
+          </span>
+          {json ? (
+            <HiOutlineCheckCircle className="size-4 shrink-0 text-emerald-400" />
+          ) : null}
         </button>
-        <label className="flex flex-col gap-1.5">
-          <span className="text-xs font-bold text-neutral-500">Backup Password</span>
-          <input
-            type="password"
-            value={backupPass}
-            onChange={(e) => setBackupPass(e.target.value)}
-            className={INPUT}
-          />
-        </label>
+
         {!preview ? (
-          <button
-            type="submit"
-            disabled={loading || !json}
-            className={cn(BTN_PRIMARY, (loading || !json) && "opacity-50 cursor-wait")}
-          >
-            {loading ? "Decrypting…" : "Preview Backup"}
-          </button>
+          <>
+            <Field
+              label="Backup password"
+              error={error}
+              hint="The password chosen when this file was exported."
+            >
+              <PasswordInput
+                value={password}
+                onChange={(event) => {
+                  setPassword(event.target.value);
+                  if (error) setError("");
+                }}
+                placeholder="Backup password"
+                disabled={loading}
+                invalid={Boolean(error)}
+              />
+            </Field>
+
+            <div className="flex gap-2">
+              <Button
+                type="submit"
+                size="block"
+                loading={loading}
+                disabled={!json || !password}
+              >
+                Preview backup
+              </Button>
+              <Button
+                variant="secondary"
+                size="block"
+                onClick={onClose}
+                disabled={loading}
+              >
+                Cancel
+              </Button>
+            </div>
+          </>
         ) : (
-          <div className="flex flex-col gap-3">
-            <div className="rounded-xl border border-neutral-200 dark:border-white/10 p-3 text-sm space-y-2">
-              {preview.entries.map((e) => (
-                <div key={e.account_id} className="flex justify-between items-center">
-                  <span className="font-mono text-xs text-neutral-500 truncate">
-                    {truncate(e.address)}
-                  </span>
-                  <span
-                    className={cn(
-                      "text-xs font-bold",
-                      e.exists ? "text-yellow-500" : "text-green-500",
-                    )}
-                  >
-                    {e.exists ? "Overwrite" : "New"}
-                  </span>
+          <>
+            <p className="nc-body">
+              Found <span className="font-bold">{preview.entries.length}</span>{" "}
+              wallet{preview.entries.length === 1 ? "" : "s"} in this backup.
+            </p>
+
+            <div className="flex flex-col gap-2">
+              {preview.entries.map((entry, index) => (
+                <div
+                  key={entry.account_id}
+                  className="nc-anim-rise flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3"
+                  style={{ animationDelay: `${index * 40}ms` }}
+                >
+                  <div className="flex min-w-0 grow flex-col">
+                    <span
+                      data-selectable
+                      className="nc-mono truncate text-neutral-200"
+                    >
+                      {truncateAddress(entry.address)}
+                    </span>
+                    <span className="nc-caption">
+                      {entry.token_count
+                        ? `${entry.token_count} token${entry.token_count === 1 ? "" : "s"}`
+                        : "no tokens"}
+                    </span>
+                  </div>
+                  {entry.exists ? (
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs font-bold text-nile-gold-400">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(overwrite[entry.account_id])}
+                        disabled={loading}
+                        onChange={(event) =>
+                          setOverwrite((current) => ({
+                            ...current,
+                            [entry.account_id]: event.target.checked,
+                          }))
+                        }
+                        className="size-3.5 accent-nile-gold-500"
+                      />
+                      Overwrite
+                    </label>
+                  ) : (
+                    <span className="shrink-0 text-xs font-bold text-emerald-400">
+                      New
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
-            <button
-              type="button"
-              onClick={handleRestore}
-              disabled={loading}
-              className={cn(BTN_PRIMARY, loading && "opacity-50 cursor-wait")}
-            >
-              {loading ? "Restoring…" : `Restore ${preview.entries.length} Wallet(s)`}
-            </button>
-          </div>
+
+            <p className="nc-caption">
+              {overwriteCount > 0
+                ? `${overwriteCount} existing wallet(s) will be replaced.`
+                : "Existing wallets are kept unless you tick Overwrite."}
+            </p>
+
+            {error ? <p className="nc-message text-red-400">{error}</p> : null}
+
+            <div className="flex gap-2">
+              <Button
+                size="block"
+                loading={loading}
+                disabled={loading}
+                onClick={handleRestore}
+              >
+                Restore {preview.entries.length} wallet
+                {preview.entries.length === 1 ? "" : "s"}
+              </Button>
+              <Button
+                variant="secondary"
+                size="block"
+                onClick={() => setPreview(null)}
+                disabled={loading}
+              >
+                Back
+              </Button>
+            </div>
+          </>
         )}
       </form>
     </Modal>
   );
 }
-
-/* ──────────────────────────────────────────────────────────────────── */
-/* Shared small modal + Tailwind tokens                                 */
-/* ──────────────────────────────────────────────────────────────────── */
-
-function Modal({ onClose, title, children }) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="relative z-10 w-full max-w-sm rounded-2xl border border-neutral-200 dark:border-white/10 bg-white dark:bg-neutral-900 p-6 shadow-xl">
-        <h2 className="text-lg font-bold mb-4">{title}</h2>
-        {children}
-      </div>
-    </div>
-  );
-}
-
-const INPUT =
-  "rounded-xl border border-neutral-200 dark:border-white/10 bg-white/70 dark:bg-white/[0.06] px-3 py-2.5 text-sm outline-none focus:border-nile-gold-500/50 transition-colors w-full";
-
-const BTN_PRIMARY =
-  "w-full rounded-xl bg-nile-gold-500 hover:bg-nile-gold-600 text-white font-bold py-2.5 text-sm transition-colors";

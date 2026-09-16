@@ -1,16 +1,21 @@
 {
   "name": "nile-vault",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "NileVault — Standalone TON wallet for the Nile ecosystem",
   "main": "src/main.js",
   "scripts": {
     "start": "vite build && electron .",
-    "dev": "cross-env VITE_DEV=1 concurrently \"vite\" \"node wait-and-launch.js\"",
-    "dev:web": "vite",
+    "dev": "vite build && electron .",
     "build:web-preview": "cross-env VITE_PREVIEW=1 vite build --outDir app-preview",
     "serve:web-preview": "node preview-server.cjs",
-    "build": "vite build && electron-builder --win",
-    "build:portable": "vite build && electron-builder --win portable"
+    "build": "vite build && npm run check:build && electron-builder --win",
+    "build:portable": "vite build && npm run check:build && electron-builder --win portable",
+    "check:build": "node scripts/check-build.mjs",
+    "test": "npm run test:send && npm run test:backup",
+    "test:send": "esbuild tests/send.test.mjs --bundle --platform=node --format=cjs --packages=external --outfile=tests/.build/send.test.cjs --log-level=warning && node tests/.build/send.test.cjs",
+    "test:backup": "esbuild tests/backup.test.mjs --bundle --platform=node --format=cjs --packages=external --outfile=tests/.build/backup.test.cjs --log-level=warning && node tests/.build/backup.test.cjs",
+    "verify:live": "esbuild scripts/live-verify.mjs --bundle --platform=node --format=esm --packages=external --outfile=tests/.build/live-verify.mjs --log-level=warning && node tests/.build/live-verify.mjs",
+    "verify:funded": "esbuild scripts/funded-verify.mjs --bundle --platform=node --format=esm --packages=external --outfile=tests/.build/funded-verify.mjs --log-level=warning && node tests/.build/funded-verify.mjs"
   },
   "dependencies": {
     "@fontsource/fira-code": "^5.2.7",
@@ -57,7 +62,7 @@
         "nsis",
         "portable"
       ],
-      "icon": "src/renderer/assets/images/nilevault-logo.jpg"
+      "icon": "build/icon.ico"
     },
     "nsis": {
       "oneClick": false,

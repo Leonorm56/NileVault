@@ -1,9 +1,23 @@
-import { Address } from "@ton/core";
-import { WalletContractV4 } from "@ton/ton";
+import { Address, fromNano } from "@ton/core";
 import { mnemonicToPrivateKey } from "@ton/crypto";
+import { Buffer } from "buffer";
 
 import Encrypter from "./Encrypter.js";
-import WalletInstance from "./WalletInstance.js";
+import WalletInstance, {
+  fetchWalletStates,
+  jettonAttachedTon,
+} from "./WalletInstance.js";
+import { decToRaw, rawToDec } from "./amount.js";
+import {
+  clearTransferInFlight,
+  markTransferInFlight,
+  withoutTransferConcurrency,
+} from "./sendQueue.js";
+import {
+  DEFAULT_WALLET_PLATFORM,
+  WALLET_PLATFORMS,
+  buildWalletContract,
+} from "./tonStandards.js";
 import storage from "./storage.js";
 
 /**
@@ -23,6 +37,8 @@ import storage from "./storage.js";
 
 const VAULT_STORAGE_KEY = "shared:nile-wallet:vault";
 const VAULT_CHECK_PLAINTEXT = "nile-vault-ok";
+/** Minimum length enforced on a backup export password. */
+export const MIN_BACKUP_PASSWORD_LENGTH = 8;
 /**
  * The picker registry. Repointed from the extension's `shared:accounts`
  * (owned by the NileChain core) to a NileVault-owned key, since NileVault owns
@@ -44,6 +60,36 @@ export function getWallet(accountId) {
 
 async function getVaultConfig() {
   return await storage.get(VAULT_STORAGE_KEY, null);
+}
+
+/**
+ * Build the wallet's contract from its *public* key alone.
+ *
+ * The public key is stored in plaintext (the picker renders before the vault is
+ * unlocked), which is enough to know the address and to price a transfer. This
+ * is what lets validation and fee estimation run without the seed — the old
+ * flow decrypted the mnemonic just to parse an address, so typing anything into
+ * the send form demanded an unlock.
+ */
+/**
+ * The contract version a wallet record was created with.
+ *
+ * Records written before the version was stored are v4r2 by definition — that
+ * was the only version this app could create.
+ */
+function platformOf(stored) {
+  return stored?.platform || DEFAULT_WALLET_PLATFORM;
+}
+
+async function loadPublicContract(accountId) {
+  const wallet = getWallet(accountId);
+  const stored = await wallet.load();
+  if (!stored?.publicKey) throw new Error("No wallet for this account");
+  const contract = buildWalletContract(
+    Buffer.from(stored.publicKey, "hex"),
+    platformOf(stored),
+  );
+  return { wallet, stored, contract };
 }
 
 function requireKey() {
@@ -97,59 +143,153 @@ export async function getKeyPair(accountId) {
 
   const phrase = await wallet.decryptSeed(stored.encrypted, key);
   const keyPair = await mnemonicToPrivateKey(phrase.split(" "));
-  const contract = WalletContractV4.create({
-    workchain: 0,
-    publicKey: keyPair.publicKey,
-  });
+  const platform = platformOf(stored);
+  const contract = buildWalletContract(keyPair.publicKey, platform);
 
-  return { keyPair, phrase, contract };
+  return { keyPair, phrase, contract, platform };
 }
 
-function resolveSendParams(wallet, message) {
-  const { kind, token, to, amount } = message;
+/**
+ * Validate a transfer request and resolve everything the signing step needs.
+ *
+ * The recipient's *form* is kept: `Address.parseFriendly` reports whether the
+ * user pasted the bounceable (`EQ…`) or non-bounceable (`UQ…`) encoding, and on
+ * an account that has no code yet those two behave in opposite ways (TON docs,
+ * "Message management → bounce"). Collapsing both into one normalized string
+ * before the send stack sees it — which is what the UI used to do — throws that
+ * choice away. A raw `0:…` address carries no flag, so the bounceable reading is
+ * used.
+ *
+ * The jetton wallet address is resolved here, from the master, rather than read
+ * off the token record: it is the contract a TEP-74 transfer must target, and a
+ * stored copy can be stale.
+ */
+async function resolveSendParams(wallet, message) {
+  const { kind, token, to, amount, comment, sweep } = message;
 
+  const recipient = String(to || "").trim();
+  if (!recipient) throw new Error("Enter a recipient address");
+
+  let parsed;
   try {
-    Address.parse(to);
+    parsed = Address.parseFriendly(recipient);
   } catch {
-    throw new Error("Invalid recipient address");
+    let address;
+    try {
+      address = Address.parse(recipient);
+    } catch {
+      throw new Error("Enter a valid TON address (EQ… or UQ…)");
+    }
+    parsed = { address, isBounceable: true, isTestOnly: false };
   }
-  if (!amount) throw new Error("Enter an amount");
+
+  // A testnet address has the same hash as its mainnet twin, so accepting one
+  // silently sends real funds to the mainnet account at that hash.
+  if (parsed.isTestOnly) {
+    throw new Error(
+      "That is a testnet address. NileVault works on mainnet, and the same hash exists there — use the mainnet address.",
+    );
+  }
+
+  if (!amount || !String(amount).trim()) throw new Error("Enter an amount");
 
   let raw;
   let jetton = null;
   if (kind === "jetton") {
-    if (!token?.jetton_wallet_address) throw new Error("Token not tracked");
-    raw = wallet.parseAmountToRaw(amount, Number(token.decimals) || 9);
-    jetton = token;
+    if (!token?.jetton_master_address) throw new Error("Choose a token to send");
+    const decimals = Number(token.decimals) || 9;
+    raw = decToRaw(amount, decimals);
+    const jettonWalletAddress = await wallet.resolveJettonWalletAddress(
+      token.jetton_master_address,
+    );
+    jetton = {
+      ...token,
+      jetton_wallet_address: jettonWalletAddress,
+      attachedNano: jettonAttachedTon(token).toString(),
+    };
   } else {
-    raw = wallet.parseAmountToRaw(amount, 9);
+    raw = decToRaw(amount, 9);
   }
+
   if (raw <= 0n) throw new Error("Amount must be greater than zero");
 
-  return { to, raw, jetton };
+  return {
+    to: parsed.address.toString(),
+    typed: recipient,
+    isBounceable: parsed.isBounceable,
+    raw,
+    jetton,
+    comment: kind === "jetton" ? "" : String(comment ?? "").trim(),
+    sweep: kind === "ton" && sweep === true,
+  };
 }
 
-async function handleTransferEstimate(accountId, message) {
-  const wallet = getWallet(accountId);
-  const { contract, keyPair } = await getKeyPair(accountId);
-  const params = resolveSendParams(wallet, message);
+/**
+ * Refuse a bounceable transfer to an account that has no code yet.
+ *
+ * A bounceable message to an account that does not exist is returned to the
+ * sender, so the recipient never sees the money and the sender only loses fees.
+ * The recipient's own form is the escape hatch: `UQ…` asks for exactly that
+ * behaviour deliberately, which is why receive screens show `UQ…`.
+ *
+ * Returns the recipient's snapshot so the caller can surface transfer hints
+ * (`memo_required`, scam flags) without a second read.
+ */
+async function checkDestination(wallet, params) {
+  if (params.jetton) return null; // the jetton wallet is a deployed contract
+  if (!params.isBounceable) return null; // an explicit non-bounceable request
 
-  const { cell } = await wallet.buildSignedTransfer({
+  const snapshot = await wallet.fetchWalletState(params.to);
+  if (!snapshot.deployed) {
+    throw new Error(
+      "That address has no code on-chain yet, so a bounceable transfer would be returned to you. If you are sure it is correct, send to its non-bounceable (UQ…) form instead.",
+    );
+  }
+  return snapshot;
+}
+
+/**
+ * Price a transfer and check the funds, without the seed.
+ *
+ * The serialized message is signed with a throwaway key purely so its size —
+ * and therefore its fee — matches what will really be broadcast. That BOC is
+ * never sent anywhere. The sender's state comes from one snapshot, and the
+ * recipient's is read once here so the form can warn before the confirm dialog.
+ */
+async function handleTransferEstimate(accountId, message) {
+  const { wallet, stored, contract } = await loadPublicContract(accountId);
+  const params = await resolveSendParams(wallet, message);
+  const destination = await checkDestination(wallet, params);
+
+  const snapshot = await wallet.fetchWalletState(contract.address.toString());
+
+  const request = await wallet.buildTransferRequest({
     contract,
-    keyPair,
+    keyPair: { secretKey: Buffer.alloc(64) },
     to: params.to,
     amountRaw: params.raw,
     jetton: params.jetton,
+    comment: params.comment,
+    isBounceable: params.isBounceable,
+    sweep: params.sweep,
+    snapshot,
+    platform: platformOf(stored),
   });
-  const feeNano = await wallet.estimateTransferFee(
-    contract.address.toString(),
-    cell,
-  );
+
+  const { feeNano, estimated, source } = await wallet.estimateTransferFee({
+    request,
+    contract,
+    isJetton: Boolean(params.jetton),
+  });
+
   const funds = await wallet.checkTransferFunds({
     contract,
     amountRaw: params.raw,
     jetton: params.jetton,
     feeNano,
+    attachedNano: request.attachedNano,
+    snapshot,
+    sweep: params.sweep,
   });
 
   return {
@@ -157,51 +297,235 @@ async function handleTransferEstimate(accountId, message) {
     to: params.to,
     amountRaw: params.raw.toString(),
     feeNano: feeNano.toString(),
+    feeEstimated: estimated,
+    feeSource: source,
+    attachedNano: request.attachedNano.toString(),
+    /*
+     * The contract a jetton transfer is actually addressed to. It is not the
+     * recipient and not the token: it is the sender's own jetton wallet, the
+     * contract holding the balance. Surfacing it lets the confirmation show
+     * which contract is being paid before anything is signed — the one value in
+     * a TEP-74 send that is derived rather than typed.
+     */
+    jettonWallet: params.jetton?.jetton_wallet_address ?? null,
+    jettonMaster: params.jetton?.jetton_master_address ?? null,
     insufficient: funds.sufficient ? null : funds.reason,
-    tonBalanceRaw: funds.tonBalanceRaw,
-    jettonBalanceRaw: funds.jettonBalanceRaw,
+    tonBalanceRaw: funds.tonBalanceNano.toString(),
+    jettonBalanceRaw:
+      funds.jettonBalanceNano === null || funds.jettonBalanceNano === undefined
+        ? null
+        : funds.jettonBalanceNano.toString(),
+    needsDeploy: request.needsDeploy,
+    sendMode: request.sendMode,
+    isBounceable: request.isBounceable,
+    sweep: params.sweep,
+    // Hints about the recipient, read from the same request cycle.
+    memoRequired: Boolean(destination?.memoRequired),
+    recipientScam: Boolean(destination?.isScam),
+    // What the chain says the *sender's* contract is, against what is signing.
+    walletType: request.walletType,
+    platform: request.platform,
   };
 }
 
+/**
+ * Listeners for the outcome of an already-broadcast transfer.
+ *
+ * The send call returns as soon as the network accepts the message; the
+ * seqno-advance confirmation finishes later and publishes here, so the screen
+ * that started the transfer can update itself instead of holding the whole
+ * request open for up to a minute.
+ */
+const transferListeners = new Set();
+
+export function onTransferSettled(callback) {
+  transferListeners.add(callback);
+  return () => transferListeners.delete(callback);
+}
+
+function emitTransferSettled(payload) {
+  for (const callback of [...transferListeners]) {
+    try {
+      callback(payload);
+    } catch {
+      /* a broken listener must not break the transfer */
+    }
+  }
+}
+
+/**
+ * Sign and broadcast a transfer.
+ *
+ * Two properties are load-bearing here:
+ *
+ *  1. The whole build → sign → broadcast sequence runs inside the per-wallet
+ *     send queue, and the sender's state is read *after* the in-flight mark is
+ *     set, so the `seqno` that gets signed is never one a concurrent send (the
+ *     form, another window, a TON Connect request) is also about to consume.
+ *     Two signatures against the same `seqno` cannot both land, and the loser is
+ *     dropped by validators without any error reaching the app.
+ *
+ *  2. Confirmation is not awaited. The wallet's `seqno` advancing is the proof
+ *     that the message was executed, and watching for it takes as long as the
+ *     chain takes (up to a minute). The caller gets the message id immediately;
+ *     the outcome arrives through {@link onTransferSettled}.
+ */
 async function handleTransferSend(accountId, message) {
   const wallet = getWallet(accountId);
-  const { contract, keyPair } = await getKeyPair(accountId);
-  const params = resolveSendParams(wallet, message);
+  const { contract, keyPair, platform } = await getKeyPair(accountId);
+  const params = await resolveSendParams(wallet, message);
+  await checkDestination(wallet, params);
 
-  const { cell, seqno } = await wallet.buildSignedTransfer({
-    contract,
-    keyPair,
-    to: params.to,
-    amountRaw: params.raw,
-    jetton: params.jetton,
+  const address = contract.address.toString();
+
+  return withoutTransferConcurrency(address, async (keepAlive) => {
+    markTransferInFlight(address);
+    let handedOff = false;
+
+    try {
+      // Read after the in-flight mark: the snapshot is fresh even if an estimate
+      // ran a moment ago.
+      const snapshot = await wallet.fetchWalletState(address);
+
+      const request = await wallet.buildTransferRequest({
+        contract,
+        keyPair,
+        to: params.to,
+        amountRaw: params.raw,
+        jetton: params.jetton,
+        comment: params.comment,
+        isBounceable: params.isBounceable,
+        sweep: params.sweep,
+        snapshot,
+        platform,
+      });
+
+      /*
+       * Fee + funds checks belong here too, but they are read-only and never
+       * touch the wallet — no key, no signing.
+       */
+      const { feeNano, estimated, source } = await wallet.estimateTransferFee({
+        request,
+        contract,
+        isJetton: Boolean(params.jetton),
+      });
+
+      const funds = await wallet.checkTransferFunds({
+        contract,
+        amountRaw: params.raw,
+        jetton: params.jetton,
+        feeNano,
+        attachedNano: request.attachedNano,
+        snapshot,
+        sweep: params.sweep,
+      });
+      if (!funds.sufficient) throw new Error(funds.reason);
+
+      const { hash } = await wallet.broadcastTransfer(request.boc);
+
+      /*
+       * Watch for the message to land on-chain, in the background. A `pending`
+       * outcome after the poll budget means the network accepted the BOC but the
+       * wallet never executed it — typically a stale seqno, a malformed body or
+       * insufficient gas. Reporting that is the difference between "sent" and
+       * "sent and executed".
+       */
+      keepAlive(
+        (async () => {
+          let txStatus = "unknown";
+          try {
+            txStatus = await wallet.waitForConfirmation(hash, {
+              seqno: request.seqno,
+              address,
+            });
+          } finally {
+            clearTransferInFlight(address);
+            emitTransferSettled({
+              accountId,
+              hash,
+              msgHashNormalized: request.msgHashNormalized,
+              txStatus,
+            });
+          }
+        })(),
+      );
+      handedOff = true;
+
+      return {
+        status: true,
+        hash,
+        msgHashNormalized: request.msgHashNormalized,
+        messageId: request.messageId,
+        /** The message is accepted; the on-chain outcome follows. */
+        txStatus: "broadcast",
+        seqno: request.seqno,
+        feeNano: feeNano.toString(),
+        feeEstimated: estimated,
+        feeSource: source,
+        attachedNano: request.attachedNano.toString(),
+        needsDeploy: request.needsDeploy,
+        to: params.to,
+        amountRaw: params.raw.toString(),
+        symbol: params.jetton?.symbol || "TON",
+        comment: params.comment,
+      };
+    } finally {
+      if (!handedOff) clearTransferInFlight(address);
+    }
   });
-  const feeNano = await wallet.estimateTransferFee(
-    contract.address.toString(),
-    cell,
-  );
-  const funds = await wallet.checkTransferFunds({
-    contract,
-    amountRaw: params.raw,
-    jetton: params.jetton,
-    feeNano,
-  });
-  if (!funds.sufficient) throw new Error(funds.reason);
-
-  const { hash } = await wallet.broadcastTransfer(cell);
-  let status = "pending";
-  try {
-    await wallet.waitForSeqnoChange(contract.address.toString(), seqno);
-    status = "confirmed";
-  } catch {
-    /* broadcast accepted; confirmation may lag */
-  }
-
-  return { status: true, hash, txStatus: status, seqno };
 }
 
 /* -------------------------------------------------------------------------- */
 /* Wallet registry (the picker's list of NileWallet instances)                 */
 /* -------------------------------------------------------------------------- */
+
+/**
+ * Address, deployment state and balance for every wallet in the registry.
+ *
+ * The balances come from a single batched wallet-state request rather than one
+ * request per wallet. If that index is unavailable the per-wallet path (which
+ * falls back to tonapi) is used instead, so an outage degrades to more requests
+ * rather than to a picker full of dashes.
+ */
+async function walletOverview() {
+  const wallets = await listWallets();
+  const rows = [];
+  for (const entry of wallets) {
+    const stored = await getWallet(entry.id).load();
+    rows.push({
+      id: entry.id,
+      address: stored?.address || null,
+      hasWallet: Boolean(stored?.encrypted),
+    });
+  }
+
+  const addresses = rows.filter((row) => row.address).map((row) => row.address);
+  let states = addresses.length ? await fetchWalletStates(addresses) : new Map();
+
+  if (addresses.length && states.size === 0) {
+    states = new Map();
+    for (const row of rows) {
+      if (!row.address) continue;
+      try {
+        states.set(row.address, await getWallet(row.id).fetchWalletState(row.address));
+      } catch {
+        /* leave this wallet without a state; the UI shows it as unread */
+      }
+    }
+  }
+
+  return rows.map((row) => {
+    const state = row.address ? states.get(row.address) : null;
+    return {
+      id: row.id,
+      address: row.address,
+      hasWallet: row.hasWallet,
+      deployed: state ? state.deployed : null,
+      balanceNano: state ? state.balanceNano.toString() : null,
+      error: row.address && !state ? "unavailable" : null,
+    };
+  });
+}
 
 /** Read the picker registry: `[{ id, name, created }]`. */
 async function listWallets() {
@@ -308,6 +632,9 @@ async function changePassphrase({ oldPassword, newPassword }) {
       address: stored.address,
       rawAddress: stored.rawAddress,
       publicKey: stored.publicKey,
+      // Preserved: dropping it would silently move a v3/v5 wallet back onto the
+      // v4 contract on the next unlock.
+      platform: platformOf(stored),
       encrypted,
     });
   }
@@ -392,6 +719,9 @@ function parseBackup(json) {
     if (entry.added_tokens !== undefined && !Array.isArray(entry.added_tokens)) {
       throw new Error(`${label}: invalid added_tokens`);
     }
+    if (entry.platform !== undefined && !WALLET_PLATFORMS.includes(entry.platform)) {
+      throw new Error(`${label}: unsupported wallet version ${entry.platform}`);
+    }
   });
 
   return data;
@@ -409,7 +739,10 @@ async function decryptBackupEntry(entry, password, salt) {
     throw new Error("Wrong passphrase or corrupted backup");
   }
 
-  const derived = await getWallet(entry.account_id).importFromPhrase(phrase);
+  const derived = await getWallet(entry.account_id).importFromPhrase(
+    phrase,
+    entry.platform || DEFAULT_WALLET_PLATFORM,
+  );
   const recorded = Address.parse(entry.address);
   if (!Address.parse(derived.address).equals(recorded)) {
     throw new Error("Backup entry address does not match its mnemonic");
@@ -418,13 +751,27 @@ async function decryptBackupEntry(entry, password, salt) {
 }
 
 /**
- * Export every stored wallet as a passphrase-encrypted JSON backup. Always
- * returns the JSON string to the caller (the renderer saves it via a Blob
- * download) — the extension's `chrome.downloads` path does not apply here.
+ * Export every stored wallet as an encrypted JSON backup.
+ *
+ * Two secrets are involved and they are deliberately distinct: the **vault
+ * passphrase** proves the caller owns this vault, and the **backup password**
+ * encrypts the export so the file can be restored on another machine. The UI
+ * has always asked for both — previously it collected the backup password,
+ * validated it, and then silently encrypted with the vault passphrase instead,
+ * so a restore using the password the app had asked for failed with "Wrong
+ * passphrase". The backup password is now what actually protects the file.
  */
 async function handleWalletBackup(message) {
   const vKey = requireKey();
   await assertVaultPassword(message.password);
+
+  const provided = String(message.backupPassword ?? "");
+  if (provided && provided.length < MIN_BACKUP_PASSWORD_LENGTH) {
+    throw new Error(
+      `Backup password must be at least ${MIN_BACKUP_PASSWORD_LENGTH} characters`,
+    );
+  }
+  const exportPassword = provided || String(message.password);
 
   const salt = Encrypter.generateSalt();
   const entries = [];
@@ -437,7 +784,7 @@ async function handleWalletBackup(message) {
     const phrase = await wallet.decryptSeed(stored.encrypted, vKey);
     const mnemonic_encrypted = await wallet.encryptForBackup(
       phrase,
-      message.password,
+      exportPassword,
       salt,
     );
 
@@ -445,6 +792,7 @@ async function handleWalletBackup(message) {
       account_id: id,
       farm_id: null,
       address: stored.address,
+      platform: platformOf(stored),
       chain: BACKUP_CHAIN,
       mnemonic_encrypted,
       added_tokens: await wallet.listTokens(),
@@ -458,6 +806,9 @@ async function handleWalletBackup(message) {
     type: "nilewallet-backup",
     created_at: Date.now(),
     salt,
+    // Recorded so restore can tell the user which secret to type. Older files
+    // predate this field and are treated as vault-passphrase exports.
+    encrypted_with: provided ? "backup-password" : "vault-passphrase",
     entries,
   };
 
@@ -483,13 +834,19 @@ async function handleRestorePreview(message) {
     entries.push({
       account_id: entry.account_id,
       address: entry.address,
+      platform: entry.platform || DEFAULT_WALLET_PLATFORM,
       chain: entry.chain || BACKUP_CHAIN,
       token_count: Array.isArray(entry.added_tokens) ? entry.added_tokens.length : 0,
       exists: Boolean(existing?.encrypted),
     });
   }
 
-  return { status: true, created_at: backup.created_at, entries };
+  return {
+    status: true,
+    created_at: backup.created_at,
+    encryptedWith: backup.encrypted_with || "vault-passphrase",
+    entries,
+  };
 }
 
 async function handleRestoreApply(message) {
@@ -510,13 +867,17 @@ async function handleRestoreApply(message) {
     }
 
     const phrase = await decryptBackupEntry(entry, message.password, backup.salt);
-    const derived = await wallet.importFromPhrase(phrase);
+    const derived = await wallet.importFromPhrase(
+      phrase,
+      entry.platform || DEFAULT_WALLET_PLATFORM,
+    );
     const encrypted = await wallet.encryptSeed(phrase, vKey);
 
     await wallet.save({
       address: derived.address,
       rawAddress: derived.rawAddress,
       publicKey: derived.publicKey,
+      platform: derived.platform,
       encrypted,
     });
     await storage.set(
@@ -562,6 +923,7 @@ const nileWallet = {
 
   /* ---- wallet registry (picker) ---- */
   listWallets: () => listWallets(),
+  walletOverview: () => walletOverview(),
   createWallet: (name) => createWallet(name),
   renameWallet: (id, name) => renameWallet(id, name),
   deleteWallet: (id) => deleteWallet(id),
@@ -584,24 +946,38 @@ const nileWallet = {
     const stored = await wallet.load();
     if (stored?.encrypted) throw new Error("Wallet already exists");
 
-    const { phrase, address, rawAddress, publicKey } = await wallet.generate();
+    const { phrase, address, rawAddress, publicKey, platform } = await wallet.generate();
     const encrypted = await wallet.encryptSeed(phrase, key);
-    await wallet.save({ address, rawAddress, publicKey, encrypted });
-    return { status: true, address, rawAddress, publicKey };
+    await wallet.save({ address, rawAddress, publicKey, platform, encrypted });
+    return { status: true, address, rawAddress, publicKey, platform };
   },
 
+  /**
+   * Import a recovery phrase and place it on the wallet contract that actually
+   * holds the funds.
+   *
+   * The same 24 words resolve to a different address under each wallet version,
+   * and a seed created by another app is usually not the v4 shape this app
+   * generates. Rather than guessing (and showing an empty wallet at an address
+   * the user has never funded), every candidate address is asked about once and
+   * the deployed/funded one wins.
+   */
   importWallet: async (accountId, phrase) => {
     const key = requireKey();
     const wallet = getWallet(accountId);
     const stored = await wallet.load();
     if (stored?.encrypted) throw new Error("Wallet already exists");
 
-    const result = await wallet.importFromPhrase(phrase);
+    const probe = await wallet.importFromPhrase(phrase, DEFAULT_WALLET_PLATFORM);
+    const detected = await wallet.detectPlatform(probe.publicKey);
+    const result = await wallet.importFromPhrase(phrase, detected.platform);
+
     const encrypted = await wallet.encryptSeed(result.phrase, key);
     await wallet.save({
       address: result.address,
       rawAddress: result.rawAddress,
       publicKey: result.publicKey,
+      platform: result.platform,
       encrypted,
     });
     return {
@@ -609,6 +985,10 @@ const nileWallet = {
       address: result.address,
       rawAddress: result.rawAddress,
       publicKey: result.publicKey,
+      platform: result.platform,
+      detected: detected.platform,
+      detectedBalanceNano: detected.balanceNano.toString(),
+      detectedDeployed: detected.deployed,
     };
   },
 
@@ -630,9 +1010,20 @@ const nileWallet = {
   balance: async (accountId) => {
     const wallet = getWallet(accountId);
     const stored = await wallet.load();
-    if (!stored?.address) return { balance: "0", error: "no-wallet" };
-    const balance = await wallet.getBalance(stored.address);
-    return { balance };
+    if (!stored?.address) return { balance: null, error: "no-wallet" };
+    try {
+      const info = await wallet.getAccountInfo(stored.address);
+      return {
+        balance: fromNano(info.balanceNano),
+        balanceNano: info.balanceNano.toString(),
+        deployed: info.deployed,
+        status: info.status,
+      };
+    } catch (error) {
+      // A failed read is not a zero balance. Surfacing it as an error lets the
+      // UI show "—" instead of claiming the wallet is empty.
+      return { balance: null, error: error?.message || "unavailable" };
+    }
   },
 
   listTokens: async (accountId) => {
@@ -652,13 +1043,21 @@ const nileWallet = {
     return { status: true };
   },
 
+  /**
+   * Every jetton balance for an account in one request, keyed by master
+   * address. Used by the picker to assemble its portfolio without fanning out
+   * one request per token.
+   */
+  jettonBalances: async (accountId) => {
+    const wallet = getWallet(accountId);
+    return { status: true, balances: await wallet.listJettonBalances() };
+  },
+
   tokenBalance: async (accountId, token) => {
     const wallet = getWallet(accountId);
-    const balance = await wallet.getJettonBalance(
-      token.jetton_wallet_address,
-      undefined,
-      token.jetton_master_address,
-    );
+    // `null` means "could not be read" — the UI renders it as "—" rather than
+    // as a zero holding.
+    const balance = await wallet.getJettonBalance(token.jetton_master_address);
     return {
       status: true,
       jetton_master_address: token.jetton_master_address,
@@ -670,6 +1069,9 @@ const nileWallet = {
     handleTransferEstimate(accountId, params),
 
   sendTransfer: (accountId, params) => handleTransferSend(accountId, params),
+
+  /** Subscribe to the outcome of a broadcast transfer (seqno confirmation). */
+  onTransferSettled,
 
   backup: (message) => handleWalletBackup(message),
 

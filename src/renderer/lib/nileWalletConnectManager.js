@@ -103,6 +103,15 @@ const connectManager = {
     return { status: true };
   },
 
+  /**
+   * Reject an inbound request the wallet cannot service, so the dApp receives a
+   * result instead of waiting indefinitely.
+   */
+  respondError: async (accountId, request, message) => {
+    const connect = getConnect(accountId);
+    return connect.respondError(request?.dAppPubKey, request?.request?.id, message);
+  },
+
   /** (Re)subscribe to the bridge for this account's persisted sessions. */
   subscribe: async (accountId) => {
     const connect = getConnect(accountId);

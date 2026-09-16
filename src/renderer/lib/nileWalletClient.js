@@ -8,8 +8,13 @@
  * through {@link call} so the UI sees typed lock / bad-passphrase errors.
  */
 
-import nileWallet from "./nileWallet.js";
+import nileWallet, {
+  MIN_BACKUP_PASSWORD_LENGTH,
+  onTransferSettled,
+} from "./nileWallet.js";
 import connectManager from "./nileWalletConnectManager.js";
+
+export { MIN_BACKUP_PASSWORD_LENGTH, onTransferSettled };
 
 /** Error thrown when the vault key isn't cached — UI should prompt to unlock. */
 export class NileWalletLockedError extends Error {
@@ -59,6 +64,8 @@ const nileWalletClient = {
 
   /* ---- wallet registry (picker) ---- */
   listWallets: () => call(nileWallet.listWallets),
+  /** Address + balance for every wallet, from one batched state request. */
+  walletOverview: () => call(nileWallet.walletOverview),
   createWallet: (name) => call(nileWallet.createWallet, name),
   renameWallet: (accountId, name) =>
     call(nileWallet.renameWallet, accountId, name),
@@ -84,15 +91,29 @@ const nileWalletClient = {
     call(nileWallet.removeToken, accountId, address),
   tokenBalance: (accountId, token) =>
     call(nileWallet.tokenBalance, accountId, token),
+  /** One request per wallet instead of one per token. */
+  jettonBalances: (accountId) => call(nileWallet.jettonBalances, accountId),
 
   /* ---- transfers ---- */
   estimateTransfer: (accountId, params) =>
     call(nileWallet.estimateTransfer, accountId, params),
   sendTransfer: (accountId, params) =>
     call(nileWallet.sendTransfer, accountId, params),
+  /**
+   * Subscribe to the on-chain outcome of a broadcast transfer. Same process as
+   * the send stack, so this is a plain callback rather than IPC — and it is what
+   * lets the send call return immediately while the confirmation lands later.
+   */
+  onTransferSettled,
 
   /* ---- backup / restore ---- */
-  backup: (password) => call(nileWallet.backup, { password }),
+  /**
+   * Export an encrypted backup. `password` is the vault passphrase (proof of
+   * ownership) and `backupPassword` is the secret that encrypts the file — the
+   * one a future restore needs.
+   */
+  backup: (password, backupPassword) =>
+    call(nileWallet.backup, { password, backupPassword }),
   restorePreview: (password, json) =>
     call(nileWallet.restorePreview, { password, json }),
   restoreApply: (password, json, overwrite) =>
@@ -106,6 +127,12 @@ const nileWalletClient = {
     call(connectManager.reject, accountId, prepared),
   disconnect: (accountId, dAppPubKey) =>
     call(connectManager.disconnect, accountId, dAppPubKey),
+  /**
+   * Answer an inbound request the wallet cannot service (e.g. a dApp-initiated
+   * sendTransaction), so the dApp is not left waiting forever.
+   */
+  respondError: (accountId, request, message) =>
+    call(connectManager.respondError, accountId, request, message),
   subscribe: (accountId) => call(connectManager.subscribe, accountId),
   restore: (accountId) => call(connectManager.restore, accountId),
   sessions: (accountId) => call(connectManager.sessions, accountId),

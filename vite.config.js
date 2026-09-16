@@ -22,38 +22,20 @@ export default defineConfig({
       "top-level-await": true,
     },
   },
+  /*
+    Only the real app entry is scanned. Without this the dep scanner globs every
+    *.html under the project root — including electron-builder output
+    (dist/win-unpacked/LICENSES.chromium.html) and the preview tool's
+    _preview.html — which breaks the node-polyfills buffer-shim resolution.
+
+    There is deliberately no `optimizeDeps.include` list: it only existed to feed
+    Vite's dev server, and that server cannot boot here (see the note in
+    preview-server.cjs — vite-plugin-node-polyfills is incompatible with Vite 6's
+    dev dep-optimizer). The working loop is `npm run dev` (build + Electron) or
+    `npm run build:web-preview && npm run serve:web-preview` for browser checks.
+  */
   optimizeDeps: {
-    // Only scan the real app entry. Without this, Vite's dep scanner globs
-    // every *.html under the project root — including electron-builder output
-    // (dist/win-unpacked/LICENSES.chromium.html) and the preview tool's
-    // _preview.html — which breaks the node-polyfills buffer-shim resolution.
     entries: ["index.html"],
-    // Pre-bundle the heavy / CommonJS deps in a single pass so Vite's dep
-    // optimizer doesn't discover them incrementally mid-load and thrash
-    // (which surfaces as 504 "Outdated Optimize Dep" in the browser preview).
-    include: [
-      "react",
-      "react-dom",
-      "react-dom/client",
-      "@tanstack/react-query",
-      "react-hot-toast",
-      "react-icons/hi2",
-      "qrcode.react",
-      "radix-ui",
-      "class-variance-authority",
-      "clsx",
-      "tailwind-merge",
-      "copy-to-clipboard",
-      "buffer",
-      "tweetnacl",
-      "@scure/base",
-      "@noble/hashes/scrypt.js",
-      "@noble/ciphers/webcrypto.js",
-      "@noble/ciphers/utils.js",
-      "@ton/core",
-      "@ton/crypto",
-      "@ton/ton",
-    ],
   },
   build: {
     outDir: "app",

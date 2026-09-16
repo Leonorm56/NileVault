@@ -2,7 +2,28 @@
 <html lang="en" class="dark">
 <head>
   <meta charset="UTF-8" />
+  <!--
+    The packaged app loads this document over file://, where the session's
+    onHeadersReceived hook never fires — so the policy is declared here too.
+    Only local scripts and styles, TON endpoints for data, and open image hosts
+    (tracked jettons supply their own icons). Inline styles are required by the
+    UI libraries; inline scripts are not allowed.
+
+    `frame-ancestors` is deliberately absent: browsers ignore it when it arrives
+    via a <meta> element and log a console warning. It is enforced instead by the
+    `onHeadersReceived` policy in the main process, where it is honoured.
+  -->
+  <meta
+    http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' https:; object-src 'none'; base-uri 'none'; form-action 'none'"
+  />
+  <meta name="color-scheme" content="dark" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>NileVault</title>
+  <style>
+    /* Paint the navy canvas before the bundle parses so there is no white flash. */
+    html, body { margin: 0; background: #040a14; }
+  </style>
 </head>
 <body>
   <div id="root"></div>

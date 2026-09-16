@@ -1,74 +1,80 @@
-import Button from "@/components/Button";
-import Input from "@/components/Input";
-import nileWalletClient from "@/lib/nileWalletClient";
-import toast from "react-hot-toast";
-import { cn } from "@/utils";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { HiOutlinePlus } from "react-icons/hi2";
 
-const CARD =
-  "border bg-white/70 dark:bg-white/[0.06] backdrop-blur-md shadow-sm rounded-xl";
+import Button from "@/components/Button";
+import Field from "@/components/Field";
+import Input from "@/components/Input";
+import Modal from "@/components/Modal";
+import nileWalletClient from "@/lib/nileWalletClient";
+import toast from "react-hot-toast";
 
 /**
  * Add a NileWallet instance.
  *
  * NileVault only names the instance here — the seed is created or imported
- * *inside* the wallet (NileWallet's own WalletSetup), so this no longer
- * derives keys itself. On create it hands the new registry entry back to the
- * picker, which opens it straight into setup.
+ * *inside* the wallet (NileWallet's own WalletSetup), so this does not derive
+ * keys itself. On create it hands the new registry entry back to the picker,
+ * which opens it straight into setup.
  */
 export default function AddWalletModal({ onClose, onCreated }) {
   const [name, setName] = useState("");
+  const [error, setError] = useState("");
 
   const createMutation = useMutation({
     mutationFn: (value) => nileWalletClient.createWallet(value),
   });
 
-  const submit = (ev) => {
-    ev.preventDefault();
-    const value = name.trim();
-    if (!value) return;
+  const pending = createMutation.isPending;
+  const trimmed = name.trim();
+
+  const submit = (event) => {
+    event.preventDefault();
+    if (!trimmed || pending) return;
+    setError("");
     createMutation
-      .mutateAsync(value)
+      .mutateAsync(trimmed)
       .then((res) => onCreated(res.wallet))
-      .catch((error) =>
-        toast.error(error?.message || "Failed to create wallet"),
-      );
+      .catch((failure) => {
+        const message = failure?.message || "Failed to create wallet";
+        setError(message);
+        toast.error(message);
+      });
   };
 
-  const pending = createMutation.isPending;
-
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm"
-      onClick={pending ? undefined : onClose}
+    <Modal
+      open
+      onClose={onClose}
+      dismissible={!pending}
+      title="Add NileWallet"
+      description="Give this wallet a name. You'll create a new recovery phrase or import an existing one inside it."
+      icon={<HiOutlinePlus className="size-4" />}
+      size="max-w-sm"
     >
-      <form
-        onClick={(e) => e.stopPropagation()}
-        onSubmit={submit}
-        className={cn(CARD, "flex flex-col gap-3 p-5 w-full max-w-sm")}
-      >
-        <h2 className="text-lg font-bold font-turret-road text-nile-gold-500">
-          Add NileWallet
-        </h2>
-        <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          Give this wallet a name. You'll create a new recovery phrase or import
-          an existing one inside it.
-        </p>
-        <Input
-          autoFocus
-          value={name}
-          placeholder="e.g. Main"
-          onChange={(e) => setName(e.target.value)}
-          disabled={pending}
-        />
+      <form onSubmit={submit} className="nc-stack">
+        <Field label="Wallet name" error={error}>
+          <Input
+            autoFocus
+            value={name}
+            placeholder="e.g. Main"
+            maxLength={42}
+            onChange={(event) => {
+              setName(event.target.value);
+              if (error) setError("");
+            }}
+            disabled={pending}
+            invalid={Boolean(error)}
+          />
+        </Field>
+
         <div className="flex gap-2">
-          <Button type="submit" disabled={pending || !name.trim()}>
-            {pending ? "Creating…" : "Create"}
+          <Button type="submit" size="block" loading={pending} disabled={!trimmed}>
+            Create
           </Button>
           <Button
-            type="button"
             variant="secondary"
+            size="block"
             onClick={onClose}
             disabled={pending}
           >
@@ -76,6 +82,6 @@ export default function AddWalletModal({ onClose, onCreated }) {
           </Button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }

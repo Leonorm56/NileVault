@@ -10,7 +10,11 @@ const FALLBACK_BRIDGES = [
   "https://bridge.tonapi.io/bridge",
   "https://bridgeconnect.ton.org/bridge",
 ];
-const WALLET_APP_NAME = "NileChain";
+/**
+ * Identity advertised to dApps. This must be the app the user actually has
+ * open — it previously said "NileChain", so a dApp's UI named the wrong wallet.
+ */
+const WALLET_APP_NAME = "NileVault";
 const WALLET_VERSION = "1.0.0";
 /** TON mainnet CHAIN id used in ton_addr items. */
 const TON_MAINNET = "-239";
@@ -43,7 +47,9 @@ function bytesToHex(bytes) {
  * The injected `window.tonconnect` JS-bridge path does NOT use this transport;
  * it reuses {@link buildConnectItems}/{@link buildConnectEvent} directly.
  *
- * Runs only in the MV3 service worker. No DOM, no page crypto.
+ * Runs in the renderer. NileChain's version ran in an MV3 service worker because
+ * its popup was ephemeral; NileVault's BrowserWindow is persistent, so the
+ * EventSource bridge lives here alongside the rest of the wallet stack.
  */
 export default class NileWalletConnect {
   /**
@@ -395,6 +401,45 @@ export default class NileWalletConnect {
     const body = this.boxEncrypt(event, dAppPubKey, walletKeyPair.secretKey);
     await this.sendToBridge(walletPublicKey, dAppPubKey, body);
     return { status: true };
+  }
+
+  /**
+   * Answer a bridge request the wallet cannot service.
+   *
+   * Requests other than `connect` (notably `sendTransaction`) are delivered to
+   * the UI, but there was no bridge reply path at all — so a connected dApp that
+   * asked the wallet to sign would wait forever with no error and no timeout.
+   * Replying with an explicit error lets the dApp surface a real message.
+   *
+   * A dApp-initiated sign-and-send flow is the natural follow-up; until one
+   * exists, an honest rejection is the correct behaviour.
+   */
+  async respondError(dAppPubKey, requestId, message) {
+    const sessions = await this.loadSessions();
+    const session = sessions[dAppPubKey];
+    if (!session) return { status: false, reason: "no-session" };
+
+    const event = {
+      event: "sendTransaction_error",
+      id: requestId ?? this.eventId++,
+      payload: {
+        code: 400,
+        message: message || "This request is not supported by NileVault",
+        data: null,
+      },
+    };
+
+    const body = this.boxEncrypt(
+      event,
+      dAppPubKey,
+      hexToBytes(session.walletSecretKey),
+    );
+    try {
+      await this.sendToBridge(session.walletPublicKey, dAppPubKey, body);
+      return { status: true };
+    } catch (error) {
+      return { status: false, reason: error?.message || "publish-failed" };
+    }
   }
 
   /** Disconnect an active session and tell the dApp. */
