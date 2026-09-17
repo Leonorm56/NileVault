@@ -1,6 +1,6 @@
 {
   "name": "nile-vault",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "NileVault — Standalone TON wallet for the Nile ecosystem",
   "main": "src/main.js",
   "scripts": {
@@ -11,11 +11,14 @@
     "build": "vite build && npm run check:build && electron-builder --win",
     "build:portable": "vite build && npm run check:build && electron-builder --win portable",
     "check:build": "node scripts/check-build.mjs",
-    "test": "npm run test:send && npm run test:backup",
+    "test": "npm run test:send && npm run test:backup && npm run test:tonconnect",
     "test:send": "esbuild tests/send.test.mjs --bundle --platform=node --format=cjs --packages=external --outfile=tests/.build/send.test.cjs --log-level=warning && node tests/.build/send.test.cjs",
     "test:backup": "esbuild tests/backup.test.mjs --bundle --platform=node --format=cjs --packages=external --outfile=tests/.build/backup.test.cjs --log-level=warning && node tests/.build/backup.test.cjs",
+    "test:tonconnect": "esbuild tests/tonconnect.test.mjs --bundle --platform=node --format=cjs --packages=external --outfile=tests/.build/tonconnect.test.cjs --log-level=warning && node tests/.build/tonconnect.test.cjs",
     "verify:live": "esbuild scripts/live-verify.mjs --bundle --platform=node --format=esm --packages=external --outfile=tests/.build/live-verify.mjs --log-level=warning && node tests/.build/live-verify.mjs",
-    "verify:funded": "esbuild scripts/funded-verify.mjs --bundle --platform=node --format=esm --packages=external --outfile=tests/.build/funded-verify.mjs --log-level=warning && node tests/.build/funded-verify.mjs"
+    "verify:funded": "esbuild scripts/funded-verify.mjs --bundle --platform=node --format=esm --packages=external --outfile=tests/.build/funded-verify.mjs --log-level=warning && node tests/.build/funded-verify.mjs",
+    "verify:tonconnect": "esbuild scripts/tonconnect-verify.mjs --bundle --platform=node --format=esm --packages=external --outfile=tests/.build/tonconnect-verify.mjs --log-level=warning && node tests/.build/tonconnect-verify.mjs",
+    "verify:ui": "esbuild scripts/tonconnect-ui-verify.mjs --bundle --platform=node --format=esm --packages=external --outfile=tests/.build/tonconnect-ui-verify.mjs --log-level=warning && node tests/.build/tonconnect-ui-verify.mjs"
   },
   "dependencies": {
     "@fontsource/fira-code": "^5.2.7",

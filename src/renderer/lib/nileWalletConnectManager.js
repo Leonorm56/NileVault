@@ -74,11 +74,20 @@ async function ensureKeys(connect, accountId) {
 }
 
 const connectManager = {
-  /** Parse a `tc://` universal link into a UI-ready connect request. */
+  /**
+   * Parse a `tc://` universal link into a UI-ready connect request.
+   *
+   * The prepared request is returned **flattened** next to `status`. It used to
+   * be nested under `prepared`, but the UI hands this object straight to the
+   * approval sheet and back to {@link approve}: with the nesting, `manifest`,
+   * `items` and `dAppPubKey` all read as `undefined` downstream, which is what
+   * crashed the connection with "Cannot read properties of undefined (reading
+   * 'length')" when the approval tried to encrypt for an undefined session key.
+   */
   parseLink: async (accountId, link) => {
     const connect = getConnect(accountId);
     const prepared = await connect.prepareConnectRequest(link);
-    return { status: true, prepared };
+    return { status: true, ...prepared };
   },
 
   /** Approve a prepared connect request (signs ton_proof, opens the bridge). */

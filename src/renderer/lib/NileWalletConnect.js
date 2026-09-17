@@ -20,14 +20,95 @@ const WALLET_VERSION = "1.0.0";
 const TON_MAINNET = "-239";
 const NONCE_LENGTH = nacl.box.nonceLength; // 24
 
-/** hex string -> Uint8Array */
+/**
+ * hex string -> Uint8Array.
+ *
+ * Validates its input. An absent key used to reach `hex.length` and surface as
+ * "Cannot read properties of undefined (reading 'length')" from inside the box
+ * encryption — a stack trace with no hint of the real problem. Every caller now
+ * gets a message that can be shown to the user instead.
+ */
 function hexToBytes(hex) {
-  const clean = hex.length % 2 ? "0" + hex : hex;
+  if (typeof hex !== "string" || !hex.trim()) {
+    throw new Error("Connect session key is missing");
+  }
+  const trimmed = hex.trim();
+  if (!/^[0-9a-fA-F]+$/.test(trimmed)) {
+    throw new Error("Connect session key is malformed");
+  }
+  const clean = trimmed.length % 2 ? "0" + trimmed : trimmed;
   const out = new Uint8Array(clean.length / 2);
   for (let i = 0; i < out.length; i++) {
     out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
   }
   return out;
+}
+
+/** Item names a wallet may answer. Anything else is ignored. */
+const SUPPORTED_ITEMS = ["ton_addr", "ton_proof"];
+
+/**
+ * Normalize a request's `items` list.
+ *
+ * `items` is not a fixed, always-present part of a connect link: a dApp may ask
+ * for `ton_addr` alone, may omit the list, and may add item types this wallet
+ * does not implement. So the list is validated rather than trusted — a non-array
+ * becomes the default, unknown names are dropped, and a `ton_proof` item always
+ * carries a string payload (the proof builder must never see `undefined`).
+ *
+ * `ton_addr` is always present in the result: the spec makes it mandatory in a
+ * ConnectEvent reply, so a request that only asks for `ton_proof` still gets an
+ * address.
+ */
+function normalizeRequestItems(items) {
+  const list = Array.isArray(items) ? items : [];
+  const normalized = [];
+
+  for (const item of list) {
+    if (!item || typeof item !== "object") continue;
+    if (!SUPPORTED_ITEMS.includes(item.name)) continue;
+    if (normalized.some((entry) => entry.name === item.name)) continue;
+    normalized.push(
+      item.name === "ton_proof"
+        ? {
+            name: "ton_proof",
+            payload: typeof item.payload === "string" ? item.payload : "",
+          }
+        : { name: "ton_addr" },
+    );
+  }
+
+  if (!normalized.some((entry) => entry.name === "ton_addr")) {
+    normalized.unshift({ name: "ton_addr" });
+  }
+  return normalized;
+}
+
+/**
+ * Validate a prepared connect request before it is signed/published.
+ *
+ * The request round-trips through the UI (manager → modal → manager), so the
+ * fields this flow depends on are checked here rather than assumed: without it
+ * a missing `dAppPubKey` produced a TypeError inside the box encryption.
+ */
+function assertPrepared(prepared) {
+  // Tolerate the historical `{ status, prepared }` envelope: a request that
+  // round-tripped through an older UI must still approve rather than arriving
+  // here with every field undefined.
+  const request =
+    prepared && typeof prepared === "object" && prepared.prepared && !prepared.dAppPubKey
+      ? prepared.prepared
+      : prepared;
+
+  if (!request || typeof request !== "object" || !request.dAppPubKey) {
+    throw new Error("Invalid connect link: nothing to approve");
+  }
+  return {
+    dAppPubKey: String(request.dAppPubKey).trim(),
+    manifest: request.manifest || {},
+    manifestUrl: request.manifestUrl || request.manifest?.url || null,
+    items: normalizeRequestItems(request.items),
+  };
 }
 
 /** Uint8Array -> hex string */
@@ -102,74 +183,148 @@ export default class NileWalletConnect {
 
   /**
    * Parse a `tc://` or `https://…/ton-connect` universal link.
+   *
+   * Params are read by name, never by position, so a link is free to carry extra
+   * ones — `rignite` sends `trace_id` where `sixseven` sends nothing, and both
+   * are handled identically here. A link that cannot be understood fails with a
+   * single user-facing "Invalid connect link" message rather than a TypeError
+   * from somewhere deeper in the crypto path.
+   *
    * @param {string} link
-   * @returns {{ version: string, dAppPubKey: string, request: object, ret: string|null }}
+   * @returns {{ version: string, dAppPubKey: string, request: object, ret: string|null, traceId: string|null }}
    */
   parseLink(link) {
-    const queryIndex = link.indexOf("?");
-    if (queryIndex === -1) throw new Error("Invalid TON Connect link");
+    if (typeof link !== "string" || !link.trim()) {
+      throw new Error("Invalid connect link");
+    }
 
-    const params = new URLSearchParams(link.slice(queryIndex + 1));
-    const dAppPubKey = params.get("id");
+    const trimmed = link.trim();
+    const queryIndex = trimmed.indexOf("?");
+    if (queryIndex === -1) throw new Error("Invalid connect link");
+
+    const params = new URLSearchParams(trimmed.slice(queryIndex + 1));
+    const dAppPubKey = (params.get("id") || "").trim();
     const rParam = params.get("r");
 
     if (!dAppPubKey || !rParam) {
-      throw new Error("TON Connect link missing id/r");
+      throw new Error("Invalid connect link: missing id or r parameter");
     }
-
-    let request;
-    try {
-      request = JSON.parse(rParam);
-    } catch (e) {
-      request = JSON.parse(decodeURIComponent(rParam));
+    if (!/^[0-9a-fA-F]+$/.test(dAppPubKey)) {
+      throw new Error("Invalid connect link: malformed session id");
     }
 
     return {
       version: params.get("v") || "2",
       dAppPubKey,
-      request,
+      request: this.decodeRequestPayload(rParam),
       ret: params.get("ret"),
+      traceId: params.get("trace_id"),
     };
   }
 
   /**
+   * Decode the `r` query parameter into a connect request object.
+   *
+   * `r` is URL-encoded JSON, but dApps vary: some send it encoded twice, some
+   * send it raw. Both forms are tried, and every failure mode collapses into the
+   * same clear error so the UI can say "Invalid connect link" instead of leaking
+   * a JSON.parse message.
+   */
+  decodeRequestPayload(rParam) {
+    const candidates = [rParam];
+    try {
+      const onceMore = decodeURIComponent(rParam);
+      if (onceMore !== rParam) candidates.push(onceMore);
+    } catch {
+      /* not percent-encoded — the raw value is already covered */
+    }
+
+    let parsed = null;
+    for (const candidate of candidates) {
+      if (typeof candidate !== "string") continue;
+      try {
+        const value = JSON.parse(candidate);
+        if (value && typeof value === "object" && !Array.isArray(value)) {
+          parsed = value;
+          break;
+        }
+      } catch {
+        /* try the next decoding */
+      }
+    }
+
+    if (!parsed) {
+      throw new Error("Invalid connect link: could not read the request payload");
+    }
+    if (
+      typeof parsed.manifestUrl !== "string" ||
+      !/^https?:\/\//i.test(parsed.manifestUrl.trim())
+    ) {
+      throw new Error("Invalid connect link: missing app manifest URL");
+    }
+    if (parsed.items !== undefined && !Array.isArray(parsed.items)) {
+      throw new Error("Invalid connect link: malformed items list");
+    }
+
+    return { ...parsed, manifestUrl: parsed.manifestUrl.trim() };
+  }
+
+  /**
    * Turn a raw link into a UI-ready connect request (fetches the manifest so
-   * the modal can show the requesting app's name/icon), and stash it pending.
+   * the modal can show the requesting app's name/icon).
    */
   async prepareConnectRequest(link) {
-    const { dAppPubKey, request, ret } = this.parseLink(link);
+    const { dAppPubKey, request, ret, traceId } = this.parseLink(link);
     const manifest = await this.fetchManifest(request.manifestUrl);
 
     return {
       transport: "bridge",
       dAppPubKey,
       ret,
+      traceId,
       manifestUrl: request.manifestUrl,
       manifest,
-      items: request.items || [{ name: "ton_addr" }],
+      items: normalizeRequestItems(request.items),
     };
   }
 
-  /** Fetch and normalize a TON Connect manifest (best-effort). */
+  /**
+   * Fetch and normalize a TON Connect manifest (best-effort).
+   *
+   * The response shape is never assumed: a manifest that is empty, is not an
+   * object, or renames a field still yields a usable identity (host name, no
+   * icon) so the approval sheet renders instead of failing.
+   */
   async fetchManifest(manifestUrl) {
+    const fallbackName = (() => {
+      try {
+        return new URL(manifestUrl).host;
+      } catch {
+        return typeof manifestUrl === "string" ? manifestUrl : "";
+      }
+    })();
+
     try {
       const res = await fetch(manifestUrl);
       if (!res.ok) throw new Error(`manifest ${res.status}`);
       const data = await res.json();
+      const manifest = data && typeof data === "object" ? data : {};
       return {
-        url: data.url || manifestUrl,
-        name: data.name || new URL(manifestUrl).host,
-        iconUrl: data.iconUrl || null,
+        url:
+          typeof manifest.url === "string" && manifest.url
+            ? manifest.url
+            : manifestUrl,
+        name:
+          typeof manifest.name === "string" && manifest.name
+            ? manifest.name
+            : fallbackName,
+        iconUrl:
+          typeof manifest.iconUrl === "string" && manifest.iconUrl
+            ? manifest.iconUrl
+            : null,
       };
     } catch (e) {
-      const host = (() => {
-        try {
-          return new URL(manifestUrl).host;
-        } catch {
-          return manifestUrl;
-        }
-      })();
-      return { url: manifestUrl, name: host, iconUrl: null };
+      return { url: manifestUrl, name: fallbackName, iconUrl: null };
     }
   }
 
@@ -179,14 +334,18 @@ export default class NileWalletConnect {
 
   /** Encrypt an object for a receiver session public key. */
   boxEncrypt(obj, receiverPubKeyHex, walletSecretKeyBytes) {
+    // Resolved before the nonce is drawn so a bad key throws (with a readable
+    // message) rather than producing an undecryptable body.
+    const receiverPublicKey = hexToBytes(receiverPubKeyHex);
+    if (
+      !walletSecretKeyBytes ||
+      walletSecretKeyBytes.length !== nacl.box.secretKeyLength
+    ) {
+      throw new Error("Connect session key is unavailable — reconnect the app");
+    }
     const nonce = nacl.randomBytes(NONCE_LENGTH);
     const msg = new TextEncoder().encode(JSON.stringify(obj));
-    const cipher = nacl.box(
-      msg,
-      nonce,
-      hexToBytes(receiverPubKeyHex),
-      walletSecretKeyBytes,
-    );
+    const cipher = nacl.box(msg, nonce, receiverPublicKey, walletSecretKeyBytes);
     const full = new Uint8Array(nonce.length + cipher.length);
     full.set(nonce);
     full.set(cipher, nonce.length);
@@ -195,15 +354,17 @@ export default class NileWalletConnect {
 
   /** Decrypt a base64 bridge body from a sender session public key. */
   boxDecrypt(b64, senderPubKeyHex, walletSecretKeyBytes) {
+    const senderPublicKey = hexToBytes(senderPubKeyHex);
+    if (
+      !walletSecretKeyBytes ||
+      walletSecretKeyBytes.length !== nacl.box.secretKeyLength
+    ) {
+      throw new Error("Connect session key is unavailable — reconnect the app");
+    }
     const full = base64.decode(b64);
     const nonce = full.slice(0, NONCE_LENGTH);
     const cipher = full.slice(NONCE_LENGTH);
-    const msg = nacl.box.open(
-      cipher,
-      nonce,
-      hexToBytes(senderPubKeyHex),
-      walletSecretKeyBytes,
-    );
+    const msg = nacl.box.open(cipher, nonce, senderPublicKey, walletSecretKeyBytes);
     if (!msg) throw new Error("Bridge message decryption failed");
     return JSON.parse(new TextDecoder().decode(msg));
   }
@@ -302,14 +463,15 @@ export default class NileWalletConnect {
    */
   async buildConnectItems(requestedItems, domain) {
     const items = [];
-    for (const item of requestedItems || [{ name: "ton_addr" }]) {
+    // normalizeRequestItems guarantees a supported, non-empty list that always
+    // includes ton_addr, so this loop can never leave `items` empty.
+    for (const item of normalizeRequestItems(requestedItems)) {
       if (item.name === "ton_addr") {
         items.push(this.buildAddressItem());
       } else if (item.name === "ton_proof") {
-        items.push(await this.buildProofItem(item.payload || "", domain));
+        items.push(await this.buildProofItem(item.payload, domain));
       }
     }
-    if (!items.length) items.push(this.buildAddressItem());
     return items;
   }
 
@@ -349,7 +511,7 @@ export default class NileWalletConnect {
    * @param {object} prepared output of {@link prepareConnectRequest}
    */
   async approve(prepared) {
-    const { dAppPubKey, manifest, manifestUrl, items } = prepared;
+    const { dAppPubKey, manifest, manifestUrl, items } = assertPrepared(prepared);
     const domain = (() => {
       try {
         return new URL(manifest?.url || manifestUrl).host;
@@ -389,7 +551,7 @@ export default class NileWalletConnect {
    * encrypted error to the dApp.
    */
   async reject(prepared) {
-    const { dAppPubKey } = prepared;
+    const { dAppPubKey } = assertPrepared(prepared);
     const walletKeyPair = nacl.box.keyPair();
     const walletPublicKey = bytesToHex(walletKeyPair.publicKey);
 

@@ -50,7 +50,13 @@ export default function AddressRow({
     >
       <span
         data-selectable
-        className="nc-mono grow truncate font-bold text-neutral-200"
+        className={cn(
+          "nc-mono grow font-bold text-neutral-200",
+          // A shortened address is safe to ellipsize; the full one is not — an
+          // unbroken 48-character base64 string has no break opportunity and
+          // overflows the row, so it wraps instead (`.nc-address`).
+          display ? "truncate" : "nc-address",
+        )}
       >
         {display || address || "—"}
       </span>

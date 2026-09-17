@@ -1,5 +1,8 @@
 node_modules/
-app/
+# The Vite output directory, anchored to the repo root. Unanchored, `app/` also
+# matched `src/renderer/app/` — which silently excluded the wallet screen from
+# every commit and from Tailwind's source scan.
+/app/
 dist/
 .vite/
 *.log

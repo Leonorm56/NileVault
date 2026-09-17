@@ -46,6 +46,27 @@ function call(fn, ...args) {
     .catch(wrapError);
 }
 
+/**
+ * Normalize the request handed to the UI.
+ *
+ * Accepts both the flat shape (`{dAppPubKey, manifest, items, …}`) and a nested
+ * `{ prepared }` wrapper, so the approval sheet can never again receive a
+ * request whose fields are all undefined — that mismatch is what produced
+ * "Cannot read properties of undefined (reading 'length')" when approving a
+ * pasted `tc://` link.
+ */
+function unwrapPrepared(value) {
+  const request =
+    value && typeof value === "object" && value.prepared && !value.dAppPubKey
+      ? value.prepared
+      : value;
+
+  if (!request || typeof request !== "object" || !request.dAppPubKey) {
+    throw new Error("Invalid connect link");
+  }
+  return request;
+}
+
 const nileWalletClient = {
   /* ---- vault ---- */
   vaultStatus: () => call(nileWallet.vaultStatus),
@@ -120,7 +141,8 @@ const nileWalletClient = {
     call(nileWallet.restoreApply, { password, json, overwrite }),
 
   /* ---- TON Connect (renderer-hosted bridge) ---- */
-  parseLink: (accountId, link) => call(connectManager.parseLink, accountId, link),
+  parseLink: (accountId, link) =>
+    call(connectManager.parseLink, accountId, link).then(unwrapPrepared),
   approve: (accountId, prepared) =>
     call(connectManager.approve, accountId, prepared),
   reject: (accountId, prepared) =>

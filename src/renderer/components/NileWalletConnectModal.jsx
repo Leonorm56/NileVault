@@ -33,7 +33,10 @@ export default function NileWalletConnectModal({
     }
   })();
 
-  const wantsProof = (request?.items || []).some((item) => item.name === "ton_proof");
+  // `items` comes straight from the link, so it is only an array by convention —
+  // a malformed value must not take the approval sheet down with it.
+  const requestedItems = Array.isArray(request?.items) ? request.items : [];
+  const wantsProof = requestedItems.some((item) => item?.name === "ton_proof");
   const truncated = truncateAddress(address);
 
   return (
