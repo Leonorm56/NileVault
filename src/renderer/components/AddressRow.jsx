@@ -42,15 +42,15 @@ export default function AddressRow({
       title={copied ? "Copied" : title}
       aria-label={copied ? "Address copied" : title}
       className={cn(
-        "group flex w-full items-center gap-2 rounded-xl border border-white/10 bg-white/[0.04] p-2.5 text-left",
-        "transition-[border-color,background-color,transform] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
-        "hover:border-nile-gold-500/40 hover:bg-white/[0.07] active:scale-[0.99]",
+        "group flex w-full items-center gap-2 rounded-lg border border-border bg-card p-2.5 text-left",
+        "transition-[border-color,background-color] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
+        "hover:bg-accent",
         className,
       )}
     >
       <span
         data-selectable
-        className="nc-mono grow truncate font-bold text-neutral-200"
+        className="nc-mono nc-address grow font-bold text-neutral-200"
       >
         {display || address || "—"}
       </span>
@@ -58,7 +58,7 @@ export default function AddressRow({
         copied ? (
           <HiOutlineCheck className="nc-anim-scale size-4 shrink-0 text-emerald-400" />
         ) : (
-          <HiOutlineClipboard className="size-4 shrink-0 text-neutral-500 transition-colors duration-[var(--nc-dur)] group-hover:text-nile-gold-400" />
+          <HiOutlineClipboard className="size-4 shrink-0 text-neutral-500 transition-colors duration-[var(--nc-dur)] group-hover:text-neutral-200" />
         )
       ) : null}
     </button>

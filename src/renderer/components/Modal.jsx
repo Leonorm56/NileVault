@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HiOutlineXMark } from "react-icons/hi2";
 
 import { cn } from "@/utils";
@@ -13,6 +13,13 @@ const FOCUSABLE = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(",");
 
+/*
+ * How long the shell stays mounted after `open` goes false, so the exit can
+ * play. Kept just above --nc-dur (170ms) — the animation sets the pace, this
+ * only has to outlast it.
+ */
+const EXIT_MS = 180;
+
 /**
  * Modal.
  *
@@ -21,6 +28,11 @@ const FOCUSABLE = [
  * different behaviour. This one carries the behaviour the Radix dialog already
  * had and the hand-rolled ones lacked: Esc to dismiss, a real focus trap, focus
  * restored to whatever opened it, and an animated entrance.
+ *
+ * The panel and scrim take the glass treatment (.nc-panel-glass /
+ * .nc-overlay-glass). Glass was removed here once, when the app was being
+ * flattened; it is back deliberately, and only for floating surfaces, where
+ * there is real page content behind the blur to justify it.
  */
 export default function Modal({
   open = true,
@@ -35,6 +47,39 @@ export default function Modal({
 }) {
   const panelRef = useRef(null);
   const restoreFocusRef = useRef(null);
+  const [mounted, setMounted] = useState(open);
+  const [leaving, setLeaving] = useState(false);
+  // True once the body has been scrolled, so the boundary under the header can
+  // fade — and only then, because there is nothing to separate until content
+  // actually passes beneath the title.
+  const [scrolled, setScrolled] = useState(false);
+
+  /*
+   * Enter and exit travel the same path.
+   *
+   * A dialog that scales up on entry and then vanishes on the very next frame
+   * reads as a glitch: the user never sees it leave, so it is not obvious the
+   * surface is gone rather than the click having missed. Keeping it mounted for
+   * the length of the exit lets it dissolve the way it arrived.
+   */
+  useEffect(() => {
+    if (open) {
+      setLeaving(false);
+      setMounted(true);
+      setScrolled(false);
+      return undefined;
+    }
+    if (!mounted) return undefined;
+
+    setLeaving(true);
+    const timer = setTimeout(() => {
+      setMounted(false);
+      setLeaving(false);
+    }, EXIT_MS);
+    // Re-opening mid-exit cancels the unmount, so a hurried user never loses
+    // the dialog they just reopened.
+    return () => clearTimeout(timer);
+  }, [open, mounted]);
 
   /* Move focus in on open, and back to the trigger on close. */
   useEffect(() => {
@@ -91,13 +136,23 @@ export default function Modal({
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [open, handleKeyDown]);
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
+    <div
+      className={cn(
+        "fixed inset-0 z-[60] flex items-center justify-center p-4",
+        // On the way out the shell stops taking clicks: the app behind it is
+        // live again the moment the dialog is dismissed.
+        leaving && "pointer-events-none",
+      )}
+    >
       <div
-        className="nc-anim-fade absolute inset-0 bg-neutral-950/80 backdrop-blur-sm"
-        onClick={dismissible ? onClose : undefined}
+        className={cn(
+          "nc-overlay-glass absolute inset-0 bg-background/70",
+          leaving ? "nc-anim-fade-out" : "nc-anim-fade",
+        )}
+        onClick={dismissible && !leaving ? onClose : undefined}
         aria-hidden="true"
       />
       <div
@@ -107,14 +162,25 @@ export default function Modal({
         aria-label={typeof title === "string" ? title : undefined}
         tabIndex={-1}
         className={cn(
-          "nc-anim-scale relative z-10 flex max-h-[85vh] w-full flex-col overflow-hidden",
-          "rounded-2xl border border-nile-gold-500/25 bg-neutral-900/95 shadow-2xl backdrop-blur-xl",
+          "nc-panel-glass relative z-10 flex max-h-[85vh] w-full flex-col overflow-hidden",
+          leaving ? "nc-anim-scale-out" : "nc-anim-scale",
+          "rounded-xl",
           size,
         )}
       >
-        <div className="flex items-start gap-3 border-b border-white/[0.07] p-4">
+        {/*
+          No rule under the title. The boundary only appears once the body has
+          actually scrolled under it, and it fades rather than cutting the
+          panel in half.
+        */}
+        <div
+          className={cn(
+            "relative flex items-start gap-3 p-4",
+            scrolled && "nc-scroll-edge",
+          )}
+        >
           {icon ? (
-            <div className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-nile-gold-500/30 bg-nile-gold-500/10 text-nile-gold-400">
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-accent text-muted-foreground">
               {icon}
             </div>
           ) : null}
@@ -131,7 +197,12 @@ export default function Modal({
           ) : null}
         </div>
 
-        <div className="grow overflow-y-auto p-4">{children}</div>
+        <div
+          className="grow overflow-y-auto p-4"
+          onScroll={(event) => setScrolled(event.currentTarget.scrollTop > 0)}
+        >
+          {children}
+        </div>
       </div>
     </div>
   );

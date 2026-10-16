@@ -4,7 +4,7 @@ import { HiOutlineGlobeAlt, HiOutlineShieldCheck } from "react-icons/hi2";
 import Button from "./Button";
 import { cn } from "@/utils";
 import { truncateAddress } from "@/lib/address.js";
-import NileVaultLogo from "@/assets/images/nilevault-logo.jpg";
+import NileVaultMark from "@/assets/images/nilevault-mark.png";
 
 /**
  * NileWalletConnectModal — the TON Connect approval sheet.
@@ -45,21 +45,21 @@ export default function NileWalletConnectModal({
         <Dialog.Overlay
           className={cn(
             "nc-anim-fade fixed inset-0 z-[60] flex items-center justify-center overflow-auto",
-            "bg-neutral-950/80 p-4 backdrop-blur-sm",
+            "bg-background/80 p-4",
           )}
         >
           <Dialog.Content
             onOpenAutoFocus={(event) => event.preventDefault()}
             className={cn(
               "nc-anim-scale my-auto flex w-full max-w-sm flex-col gap-4 p-5",
-              "rounded-2xl border border-nile-gold-500/25 bg-neutral-900/95 shadow-2xl backdrop-blur-xl",
+              "rounded-xl border border-border bg-popover shadow-lg",
             )}
           >
             <div className="flex flex-col items-center gap-2 text-center">
-              <div className="flex size-14 items-center justify-center rounded-full border border-nile-gold-500/40 bg-nile-gold-500/10">
+              <div className="flex size-14 items-center justify-center rounded-full border border-border bg-accent">
                 <img
-                  src={NileVaultLogo}
-                  className="size-8 rounded-lg"
+                  src={NileVaultMark}
+                  className="size-8 rounded-md"
                   alt="NileVault"
                 />
               </div>
@@ -72,16 +72,16 @@ export default function NileWalletConnectModal({
             </div>
 
             {/* Requesting app */}
-            <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
               {manifest.iconUrl ? (
                 <img
                   src={manifest.iconUrl}
-                  className="size-10 shrink-0 rounded-lg bg-white/10 object-cover"
+                  className="size-10 shrink-0 rounded-md bg-accent object-cover"
                   alt={appName}
                 />
               ) : (
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-white/10">
-                  <HiOutlineGlobeAlt className="size-5 text-neutral-300" />
+                <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-accent">
+                  <HiOutlineGlobeAlt className="size-5 text-muted-foreground" />
                 </div>
               )}
               <div className="flex min-w-0 grow flex-col">
@@ -91,9 +91,9 @@ export default function NileWalletConnectModal({
             </div>
 
             {/* Account row */}
-            <div className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-full border border-nile-gold-500/30 bg-nile-gold-500/10">
-                <img src={NileVaultLogo} className="size-5 rounded-md" alt="" />
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-full border border-border bg-accent">
+                <img src={NileVaultMark} className="size-5 rounded-md" alt="" />
               </div>
               <div className="flex min-w-0 grow flex-col">
                 <span className="nc-caption">Connecting as</span>
@@ -107,7 +107,7 @@ export default function NileWalletConnectModal({
             </div>
 
             {wantsProof ? (
-              <div className="flex items-start gap-2 text-xs text-neutral-400">
+              <div className="flex items-start gap-2 text-xs text-muted-foreground">
                 <HiOutlineShieldCheck className="mt-0.5 size-4 shrink-0 text-nile-gold-400" />
                 <span>
                   This app requests a signed proof of ownership. NileWallet signs

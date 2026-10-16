@@ -1,0 +1,34 @@
+feature,area,priority,original,clone,notes
+Unlock with passcode,access,must,yes,no,
+Wallet home shell with left nav (desktop),layout,must,yes,partial,AppShell nav live; Settings section pending
+Wallet card with total balance + % change,portfolio,must,yes,partial,exact total + hide toggle; % change needs price feed
+Quick actions Fund Send Swap Earn,home,must,yes,partial,Send/Receive/Backup scroll wired; Fund/Swap/Earn deferred
+Asset/token list with balances,portfolio,must,yes,partial,exact base-unit rows via buildHomeModel; no fiat yet
+Token page with chart + actions,token,must,yes,no,
+Send sheet with confirm + receipt,transfers,must,yes,no,
+Receive sheet with QR + copy,transfers,must,yes,no,
+Activity history list,transfers,must,yes,no,
+Transaction detail with TXID,transfers,must,yes,no,
+Settings screen,settings,must,yes,no,
+Base currency selection,settings,must,yes,no,
+Balance hiding,settings,must,yes,yes,"hero + rows masked, one mask path"
+Copy-to-clipboard feedback,ux,must,yes,yes,AddressRow/CopyButton kept
+Search-or-Ask entry,nav,should,yes,no,
+Plus (+) action sheet,nav,should,yes,no,
+Saved addresses,transfers,should,yes,no,
+Hide and sort networks,settings,should,yes,no,
+Home tab customization,settings,should,yes,no,
+Net-worth / portfolio chart,portfolio,should,yes,no,
+Add/remove token display,tokens,should,yes,no,
+Explorer link from TXID,transfers,should,yes,no,
+Market section,market,could,yes,no,deferred after UI slice
+Explore dapps section,explore,could,yes,no,deferred after UI slice
+Fund / buy-with-card entry,onramp,could,yes,no,UI entry only provider-hosted later
+Interface personalization,settings,could,yes,no,
+Subwallets and multi-wallet switching,wallets,could,yes,no,
+View-only addresses,wallets,could,yes,no,
+Swap aggregator backend,swaps,could,yes,skip,partner/infra not UI — out of UI-first slice
+Staking backend,staking,could,yes,skip,yield infra — out of UI-first slice
+NFT collectibles catalogues,collectibles,could,yes,skip,licensed content + marketplace
+Card rails + KYC providers,onramp,could,yes,skip,third-party providers
+Push notification infra,notifications,could,yes,skip,platform infra

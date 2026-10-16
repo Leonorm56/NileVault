@@ -18,9 +18,15 @@
   --font-turret-road: "Turret Road";
 
   /*
-    Design system — deep navy canvas, gold accents only.
-    The neutral scale is the navy family: every shade carries a blue
-    undertone so the UI never falls into plain grey or black.
+    Design system — deep navy canvas, gold reserved for the brand, one primary
+    action per view, and active-state markers.
+
+    Surfaces: two elevations, each a subtle vertical gradient behind a blur.
+    Deliberate change from the earlier flat treatment — glass lands on overlays
+    and the hero surfaces only (header, modals, balance hero); list rows and
+    tiles stay opaque, because blur over a near-black canvas costs legibility
+    without buying depth. Focus is no longer gold, so "focused" and "selected"
+    can never be confused.
   */
   --color-nile-gold-50: #fefcf3;
   --color-nile-gold-100: #fdf6e0;
@@ -57,6 +63,44 @@
   --color-neutral-800: #192940;
   --color-neutral-900: #0b1526;
   --color-neutral-950: #040a14;
+
+  /*
+    Semantic tokens (shadcn structure, navy values). Components use these —
+    bg-background, bg-card, text-muted-foreground, border-border — never raw
+    hex or white/opacity fills.
+  */
+  --color-background: #040a14;
+  --color-foreground: #f0f4fa;
+  --color-card: #0b1526;
+  --color-card-foreground: #f0f4fa;
+  --color-popover: #0e1830;
+  --color-popover-foreground: #f0f4fa;
+  --color-primary: #d4a843;
+  --color-primary-foreground: #0b1526;
+  --color-secondary: #192940;
+  --color-secondary-foreground: #dee6f0;
+  --color-muted: #16233a;
+  --color-muted-foreground: #8fa1b8;
+  --color-accent: #16233a;
+  --color-accent-foreground: #dee6f0;
+  --color-destructive: #e5484d;
+  --color-danger: #c62f34;
+  --color-on-danger: #f0f4fa;
+  --color-border: #22304a;
+  --color-input: #4d6a8f;
+  --color-ring: #8fb4e8;
+  /*
+    Success is a *second* accent, deliberately distinct from gold: it marks a
+    passing check or a funded balance. Gold stays reserved for the one primary
+    action on a screen, so the two never compete for the same element.
+  */
+  --color-success: #3fbf7f;
+  --color-success-foreground: #06210f;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.625rem;
+  --radius-xl: 0.875rem;
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -109,9 +153,91 @@
   /* Wallet grid: single column by default, 2 columns at lg breakpoint. */
   --wallet-grid: 1fr;
 
-  /* Elevation. */
+  /*
+    Elevation. Two levels, used consistently: surface-1 for panels and rows,
+    surface-2 for the hero, modals and anything that floats above the page.
+    Blur only pairs with a translucent base — see .nc-card-hero.
+  */
+  --nc-surface-1: linear-gradient(
+    180deg,
+    rgb(16 28 48 / 0.72) 0%,
+    rgb(11 21 38 / 0.72) 100%
+  );
+  --nc-surface-2: linear-gradient(
+    180deg,
+    rgb(26 43 71 / 0.82) 0%,
+    rgb(19 31 54 / 0.82) 100%
+  );
+  --nc-glass-1: 8px;
+  --nc-glass-2: 16px;
+  /*
+    Edge blur for the fade under sticky chrome. Its own token so the
+    reduced-transparency block can take it away with the rest of the glass.
+  */
+  --nc-glass-edge: 4px;
+
+  /*
+    Press response — how far a surface scales while the pointer is held down.
+    Two sizes, because the same scale on a 34px button and on a 140px tile do
+    not read as the same amount of give.
+  */
+  --nc-press: 0.97;
+  --nc-press-surface: 0.985;
+
+  --nc-shadow-1:
+    0 1px 2px rgb(0 0 0 / 0.45), inset 0 0 0 1px rgb(255 255 255 / 0.03);
+  --nc-shadow-2:
+    0 18px 40px -18px rgb(0 0 0 / 0.75), inset 0 0 0 1px rgb(255 255 255 / 0.04);
+
+  /* Legacy aliases — still referenced by the motion/elevation call sites. */
   --nc-shadow: 0 1px 2px rgb(0 0 0 / 0.4);
   --nc-shadow-lift: 0 8px 24px -8px rgb(0 0 0 / 0.6);
+
+  /*
+    Borders have two states. --nc-border-active is deliberately a cool blue,
+    not gold: gold is spent on the brand and the primary action, so a hovered
+    border must not compete with either.
+  */
+  --nc-border-subtle: #1e2c44;
+  --nc-border-active: #3d5a86;
+
+  /* Focus ring, moved off gold so it cannot read as "selected". */
+  --nc-focus: #8fb4e8;
+
+  /*
+    Danger gets its own surface. Previously a destructive card differed from a
+    normal one only by a red heading, so severity was carried by text alone.
+  */
+  --nc-danger-surface: linear-gradient(
+    180deg,
+    rgb(229 72 77 / 0.12) 0%,
+    rgb(229 72 77 / 0.05) 100%
+  );
+  --nc-danger-border: rgb(229 72 77 / 0.45);
+
+  /*
+    Tile dots. These are a *decorative* scanability aid derived deterministically
+    from the wallet id — they carry no status meaning. Status is carried by the
+    balance colour and the Connected pill. Defined here so no component hardcodes
+    a hex, and fixed so a dot cannot change colour between renders.
+  */
+  --nc-dot-1: #3fbf7f;
+  --nc-dot-2: #6ea8fe;
+  --nc-dot-3: #a78bfa;
+  --nc-dot-4: #f59e5b;
+  --nc-dot-5: #2dd4bf;
+  --nc-dot-6: #f472b6;
+  --nc-dot-7: #fbbf24;
+  --nc-dot-8: #818cf8;
+
+  /*
+    One numeric hierarchy: hero balance, then every other figure, then metadata.
+    Components previously mixed text-sm/font-bold/text-lg freely, so wallet
+    tiles, asset rows and labels all landed at similar weight.
+  */
+  --nc-type-balance: 2rem;
+  --nc-type-figure: 1.125rem;
+  --nc-type-meta: 0.75rem;
 }
 
 /* ────────────────────────────────────────────────────────────────────────── */
@@ -137,21 +263,7 @@
   body {
     @apply font-sans text-neutral-100 bg-neutral-950;
     height: 100%;
-    /*
-      A single fixed wash behind everything gives the flat navy canvas a little
-      depth without introducing any colour outside the palette.
-    */
-    background-image:
-      radial-gradient(
-        ellipse 90% 60% at 50% -10%,
-        rgb(25 41 64 / 0.9),
-        transparent 70%
-      ),
-      radial-gradient(
-        ellipse 70% 50% at 110% 100%,
-        rgb(212 168 67 / 0.06),
-        transparent 70%
-      );
+    background-image: none;
     background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
   }
@@ -162,7 +274,7 @@
 
   /* One visible focus treatment for every interactive element. */
   :focus-visible {
-    outline: 2px solid var(--nc-gold-bright);
+    outline: 2px solid var(--nc-focus);
     outline-offset: 2px;
     border-radius: 0.5rem;
   }
@@ -220,35 +332,51 @@
   /* Balance numbers — the dominant element on every screen. */
   .nc-balance {
     font-size: 2rem;
-    line-height: 2.5rem;
+    /* Leading tracks size inversely: a 2rem figure wants ~1.1, not the 1.25 a
+       body line wants — at 1.25 the space above and below the figure reads as
+       a stray margin and pushes the card apart. */
+    line-height: 2.2rem;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.02em;
   }
 
-  /* Display — section hero numbers. */
-  .nc-display {
-    @apply text-3xl font-bold tabular-nums tracking-tight;
+  /*
+    Figure — every figure that is not the hero balance: wallet-tile balances,
+    token holdings, per-asset amounts. Defined here because it was previously a
+    token (--nc-type-figure) with no class consuming it.
+  */
+  .nc-figure {
+    @apply text-lg font-semibold;
   }
 
-  /* Title — section headings. */
+  /* Title — section headings: plain semibold, no brand colour. */
   .nc-title {
-    @apply font-turret-road text-xl font-bold text-nile-gold-500;
+    @apply text-xl font-semibold tracking-tight text-neutral-100;
+  }
+
+  /* Wordmark — the NileVault brand lockup only (logo, app name). */
+  .nc-wordmark {
+    @apply font-turret-road font-bold text-nile-gold-500;
   }
 
   /* Section — uppercase labels. */
   .nc-section {
-    @apply text-xs font-bold uppercase tracking-wider text-neutral-400;
+    @apply text-xs font-medium uppercase tracking-wider text-muted-foreground;
   }
 
   /* Label — field labels. */
   .nc-label {
-    @apply text-xs font-bold text-neutral-400;
+    @apply text-sm font-medium text-neutral-200;
   }
 
   /* Caption — hints, secondary text. */
   .nc-caption {
-    @apply text-xs text-neutral-400;
+    @apply text-xs text-muted-foreground;
+    /* Tracking is size-specific: 12px text needs slightly *positive* spacing to
+       stay legible, where the hero figure needs negative. One fixed value for
+       the whole app is always wrong somewhere. */
+    letter-spacing: 0.01em;
   }
 
   /* Body — descriptions, prose. */
@@ -259,15 +387,20 @@
   /* Mono — addresses, hashes, machine-readable values. */
   .nc-mono {
     font-family: var(--font-mono);
-    font-size: 13px;
-    line-height: 18px;
+    /*
+      rem, not px: an address or a figure must scale with the platform text
+      size, not stay pinned while everything around it grows.
+    */
+    font-size: 0.8125rem;
+    line-height: 1.125rem;
     font-variant-numeric: tabular-nums;
+    letter-spacing: 0.01em;
   }
 
   /* Num — inline numbers. */
   .nc-num {
-    font-size: 14px;
-    line-height: 18px;
+    font-size: 0.875rem;
+    line-height: 1.125rem;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
@@ -285,74 +418,187 @@
   /* ── Card hierarchy ──────────────────────────────────────────────────── */
 
   /*
-    Level 0 — Hero: balance displays, total balance.
-    Gold gradient overlay, no hard border, generous padding.
+    Level 0 — Hero: balance displays, total balance. A flat card with a
+    hairline border; the figure carries the emphasis, not decoration.
   */
   .nc-card-hero {
-    position: relative;
-    overflow: hidden;
     border-radius: var(--nc-radius-lg);
+    border: 1px solid var(--nc-border-subtle);
+    background-color: transparent;
+    background-image: var(--nc-surface-2);
+    -webkit-backdrop-filter: blur(var(--nc-glass-2));
+    backdrop-filter: blur(var(--nc-glass-2));
+    box-shadow: var(--nc-shadow-2);
     padding: var(--nc-pad-lg);
-    text-align: center;
+    /* Left-aligned: a centred balance fought the label and address for the
+       same optical centre and left the card feeling unstyled. */
+    text-align: left;
   }
 
   /*
     Level 1 — Primary: send form, confirm dialog, main interactive surfaces.
-    Glass surface with standard border.
+    Flat solid surface, hairline border.
   */
-  .nc-card {
+  .nc-card,
+  .nc-card-primary {
     border-radius: var(--nc-radius);
-    border: 1px solid rgb(255 255 255 / 0.1);
-    background: rgb(255 255 255 / 0.04);
-    backdrop-filter: blur(12px);
+    border: 1px solid var(--nc-border-subtle);
+    background-color: transparent;
+    background-image: var(--nc-surface-1);
+    box-shadow: var(--nc-shadow-1);
     padding: var(--nc-pad);
-    box-shadow: var(--nc-shadow);
   }
 
   /*
+    .nc-card-primary was referenced by the Send section but never defined, so
+    that section rendered as a bare <section> with no surface at all. It is the
+    same treatment as .nc-card on purpose — the name is kept because the call
+    sites read better, and defining it once here fixes them all.
+  */
+
+  /*
     Level 2 — Secondary: tokens, backup, connect, settings.
-    Dimmer glass, tighter padding.
+    Slightly recessed flat surface.
   */
   .nc-card-secondary {
     border-radius: var(--nc-radius);
-    border: 1px solid rgb(255 255 255 / 0.08);
-    background: rgb(255 255 255 / 0.025);
+    border: 1px solid var(--nc-border-subtle);
+    /* Recessed, not raised: no outer shadow, an inner highlight instead. */
+    background-color: rgb(11 21 38 / 0.55);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.03);
     padding: var(--nc-pad-sm);
-    box-shadow: var(--nc-shadow);
   }
 
   /*
     Level 3 — Destructive: danger zone, reveal seed, remove wallet.
-    Solid dark with red tint, no glass blur, heavier border.
+    Flat, red-tinted hairline border.
   */
   .nc-card-danger {
     border-radius: var(--nc-radius);
-    border: 1px solid rgb(239 68 68 / 0.25);
-    background: rgb(239 68 68 / 0.06);
+    border: 1px solid var(--nc-danger-border);
+    background-color: transparent;
+    background-image: var(--nc-danger-surface);
+    box-shadow: var(--nc-shadow-1);
     padding: var(--nc-pad);
   }
 
-  /* Interactive surface: the glass card plus the shared lift + press response. */
+  /* Interactive surface: flat row that highlights on hover, no lift. */
   .nc-card-interactive {
     border-radius: var(--nc-radius);
-    border: 1px solid rgb(255 255 255 / 0.1);
-    background: rgb(255 255 255 / 0.04);
-    backdrop-filter: blur(12px);
-    box-shadow: var(--nc-shadow);
+    border: 1px solid transparent;
+    background: transparent;
     transition:
       border-color var(--nc-dur) var(--nc-ease),
       background-color var(--nc-dur) var(--nc-ease),
-      transform var(--nc-dur-fast) var(--nc-ease),
-      box-shadow var(--nc-dur) var(--nc-ease);
+      color var(--nc-dur) var(--nc-ease);
   }
   .nc-card-interactive:hover {
-    @apply border-nile-gold-500/50 bg-white/[0.06];
-    transform: translateY(-2px);
-    box-shadow: var(--nc-shadow-lift);
+    border-color: var(--nc-border-active);
+    background-color: rgb(26 43 71 / 0.5);
   }
   .nc-card-interactive:active {
-    transform: translateY(0) scale(0.985);
-    transition-duration: var(--nc-dur-fast);
+    background-color: rgb(26 43 71 / 0.7);
+  }
+
+  /*
+    Floating panels — modals, the connect sheet. surface-2 with the deeper
+    shadow, and the only place besides the hero and header where the blur is
+    worth paying for, because page content actually sits behind it.
+  */
+  .nc-panel-glass {
+    border: 1px solid var(--nc-border-subtle);
+    background-color: transparent;
+    background-image: var(--nc-surface-2);
+    -webkit-backdrop-filter: blur(var(--nc-glass-2));
+    backdrop-filter: blur(var(--nc-glass-2));
+    box-shadow: var(--nc-shadow-2);
+  }
+
+  /* The scrim behind a floating panel. */
+  .nc-overlay-glass {
+    -webkit-backdrop-filter: blur(var(--nc-glass-1));
+    backdrop-filter: blur(var(--nc-glass-1));
+  }
+
+  /*
+    Free-text control. The Import-recovery-phrase textarea used this class but
+    it was never defined, so it rendered with the browser default box on a navy
+    surface. One definition covers every call site.
+  */
+  .nc-input {
+    width: 100%;
+    border-radius: var(--nc-radius-sm);
+    border: 1px solid var(--nc-border);
+    background-color: rgb(4 10 20 / 0.6);
+    color: var(--nc-text);
+    padding: 10px 12px;
+    font-size: 14px;
+    line-height: 20px;
+    transition: border-color var(--nc-dur) var(--nc-ease);
+  }
+  .nc-input:hover {
+    border-color: var(--nc-border-active);
+  }
+  .nc-input:focus-visible {
+    border-color: var(--nc-focus);
+    outline: none;
+  }
+  .nc-input::placeholder {
+    color: var(--nc-text-faint);
+  }
+
+  /*
+    Press + hover tempo, in one place.
+
+    Response belongs on pointer-*down* and it has to be the first thing that
+    changes — waiting for the click to resolve reads as a dead control. Hover
+    states keep the normal tempo; only the press runs on the fast token.
+
+    `scale` is used rather than `transform` on purpose: a dragged wallet tile
+    already carries `scale-[1.02]` for its lifted state, so a press written as
+    `transform` would fight it, while the native `scale` property lets the
+    lifted state win for as long as the drag lasts.
+  */
+  .nc-press,
+  .nc-press-surface {
+    transition-property:
+      background-color, border-color, color, opacity, box-shadow, scale;
+    transition-duration:
+      var(--nc-dur), var(--nc-dur), var(--nc-dur), var(--nc-dur),
+      var(--nc-dur), var(--nc-dur-fast);
+    transition-timing-function: var(--nc-ease-out);
+  }
+  .nc-press:active {
+    scale: var(--nc-press);
+  }
+  .nc-press-surface:active {
+    scale: var(--nc-press-surface);
+  }
+
+  /*
+    Scroll edge.
+
+    A sticky translucent bar with a 1px rule under it cuts the page in two; the
+    boundary should fade where floating chrome actually overlaps content, and
+    only there. This strip blurs what passes beneath it and fades out downward,
+    so content dims into the bar instead of hitting a line.
+  */
+  .nc-scroll-edge::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    bottom: calc(-1 * var(--nc-gap-sm));
+    height: var(--nc-gap-sm);
+    pointer-events: none;
+    background-image: linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--nc-canvas) 85%, transparent),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(var(--nc-glass-edge));
+    backdrop-filter: blur(var(--nc-glass-edge));
+    -webkit-mask-image: linear-gradient(to bottom, #000, transparent);
+    mask-image: linear-gradient(to bottom, #000, transparent);
   }
 
   /* Section stack rhythm. */
@@ -427,6 +673,31 @@
   }
 }
 
+@keyframes nc-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/*
+  The exit counterpart of nc-scale-in: the same path, travelled backwards, so a
+  dialog that arrived by scaling up leaves by scaling down instead of vanishing
+  on the next frame.
+*/
+@keyframes nc-scale-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.96) translateY(4px);
+  }
+}
+
 @keyframes nc-shimmer {
   from {
     background-position: -200% 0;
@@ -466,18 +737,18 @@
 @utility nc-anim-slide-right {
   animation: nc-slide-right var(--nc-dur-slow) var(--nc-ease-out) both;
 }
+@utility nc-anim-fade-out {
+  animation: nc-fade-out var(--nc-dur) var(--nc-ease) both;
+}
+@utility nc-anim-scale-out {
+  animation: nc-scale-out var(--nc-dur) var(--nc-ease) both;
+}
 
-/* Skeleton shimmer — used instead of blank text while data loads. */
+/* Skeleton — flat pulsing block shaped like the final layout. */
 @utility nc-skeleton {
   border-radius: 0.5rem;
-  background-image: linear-gradient(
-    90deg,
-    rgb(255 255 255 / 0.04) 0%,
-    rgb(255 255 255 / 0.09) 50%,
-    rgb(255 255 255 / 0.04) 100%
-  );
-  background-size: 200% 100%;
-  animation: nc-shimmer 1.4s linear infinite;
+  background-color: rgb(255 255 255 / 0.06);
+  animation: nc-pulse 1.6s ease-in-out infinite;
 }
 
 /*
@@ -488,6 +759,18 @@
 @media (min-width: 64rem) {
   :root {
     --wallet-grid: repeat(2, 1fr);
+  }
+}
+
+/*
+  When the OS asks for less transparency, drop the blur rather than the depth:
+  the gradient and shadow still separate the surfaces.
+*/
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --nc-glass-1: 0px;
+    --nc-glass-2: 0px;
+    --nc-glass-edge: 0px;
   }
 }
 
@@ -505,5 +788,66 @@
     animation-iteration-count: 1 !important;
     transition-duration: 1ms !important;
     scroll-behavior: auto !important;
+  }
+
+  /*
+    Reduced motion does not mean *no* feedback. These entrances carry which way
+    a screen arrived and whether a surface is appearing or leaving, so dropping
+    them outright loses real information. Each one is replaced by its own short
+    cross-fade: no travel, no overshoot, and the state change is still visible.
+  */
+  .nc-anim-rise,
+  .nc-anim-scale,
+  .nc-anim-slide-left,
+  .nc-anim-slide-right {
+    animation-name: nc-fade-in !important;
+    animation-duration: 140ms !important;
+  }
+
+  .nc-anim-scale-out {
+    animation-name: nc-fade-out !important;
+    animation-duration: 140ms !important;
+  }
+}
+
+/*
+  High contrast. Translucency and low-alpha surfaces are the first things to
+  go: the surfaces become opaque, every boundary gets a defined border, and the
+  muted text steps up until it clears the background on its own.
+*/
+@media (prefers-contrast: more) {
+  :root {
+    --nc-glass-1: 0px;
+    --nc-glass-2: 0px;
+    --nc-glass-edge: 0px;
+
+    --nc-surface: #101c30;
+    --nc-border: #6f8cb8;
+    --nc-border-subtle: #52698f;
+    --nc-text-muted: #dee6f0;
+    --nc-text-faint: #c4d2e6;
+
+    /*
+      The card call sites paint these as `background-image`, so "solid" has to
+      arrive as a single-stop gradient — a plain colour would be invalid there
+      and drop the surface entirely.
+    */
+    --nc-surface-1: linear-gradient(180deg, #101c30 0%, #101c30 100%);
+    --nc-surface-2: linear-gradient(180deg, #16233a 0%, #16233a 100%);
+    --nc-danger-surface: linear-gradient(180deg, #2a1114 0%, #2a1114 100%);
+  }
+
+  .nc-card-hero,
+  .nc-card,
+  .nc-card-primary,
+  .nc-card-danger,
+  .nc-panel-glass {
+    border-color: var(--nc-border);
+  }
+
+  /* This one paints its own translucent fill rather than using a token. */
+  .nc-card-secondary {
+    background-color: #101c30;
+    border-color: var(--nc-border);
   }
 }

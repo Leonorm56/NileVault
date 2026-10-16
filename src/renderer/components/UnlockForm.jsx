@@ -1,7 +1,5 @@
 import { useCallback, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { HiOutlineKey } from "react-icons/hi2";
-
 import Button from "./Button";
 import Field from "./Field";
 import PasswordInput from "./PasswordInput";
@@ -62,13 +60,10 @@ export default function UnlockForm({ configured, submitLabel, onUnlocked, busy }
   const pending = Boolean(busy) || unlockMutation.isPending;
 
   return (
-    <form onSubmit={submit} className="nc-card nc-stack p-4">
-      <div className="flex items-center gap-2">
-        <HiOutlineKey className="size-4 text-nile-gold-500" />
-        <h3 className="font-bold">
-          {configured ? "Unlock NileVault" : "Set a vault passphrase"}
-        </h3>
-      </div>
+    <form onSubmit={submit} className="nc-card nc-stack w-full p-4">
+      <h3 className="font-bold">
+        {configured ? "Unlock NileVault" : "Set a vault passphrase"}
+      </h3>
 
       <p className="nc-caption leading-relaxed">
         {configured

@@ -1,5 +1,8 @@
 node_modules/
-app/
+# Vite's build output — anchored to the repo root on purpose. A bare `app/`
+# pattern also matches src/renderer/app/, which is how NileWallet.jsx — the
+# whole wallet screen — ended up ignored and out of version control.
+/app/
 dist/
 .vite/
 *.log

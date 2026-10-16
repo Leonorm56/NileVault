@@ -48,14 +48,14 @@ export default function CopyButton({
       aria-label={copied ? copiedLabel : label ? `Copy ${label}` : "Copy"}
       title={copied ? copiedLabel : "Copy"}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-lg",
-        "transition-[background-color,color,transform] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
-        "active:scale-90 disabled:opacity-40 disabled:active:scale-100",
-        showLabel ? "px-2 py-1 text-xs font-bold" : "size-8 justify-center",
+        "inline-flex items-center gap-1.5 rounded-md",
+        "transition-[background-color,color] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
+        "disabled:opacity-40",
+        showLabel ? "px-2 py-1 text-xs font-medium" : "size-8 justify-center",
         copied
           ? "text-emerald-400"
           : variant === "ghost"
-            ? "text-neutral-400 hover:bg-white/[0.09] hover:text-nile-gold-400"
+            ? "text-neutral-400 hover:bg-accent hover:text-accent-foreground"
             : "text-neutral-500 hover:text-neutral-200",
         className,
       )}

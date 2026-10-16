@@ -19,6 +19,7 @@ import {
   buildWalletContract,
 } from "./tonStandards.js";
 import storage from "./storage.js";
+import { uniqueWalletName } from "./walletName.js";
 
 /**
  * Client-side NileWallet — runs entirely in the Electron renderer.
@@ -546,6 +547,27 @@ async function createWallet(name) {
   return { status: true, wallet: entry };
 }
 
+/**
+ * The user's custom wallet order: a list of wallet ids.
+ *
+ * Ids rather than positions, so adding a wallet cannot shuffle the ones the
+ * user has already arranged, and deleting one cannot shift the rest.
+ */
+const WALLET_ORDER_STORAGE_KEY = "nilevault:wallet-order";
+
+async function getWalletOrder() {
+  const saved = await storage.get(WALLET_ORDER_STORAGE_KEY, []);
+  return Array.isArray(saved) ? saved : [];
+}
+
+async function setWalletOrder(ids) {
+  const clean = Array.isArray(ids)
+    ? ids.filter((id) => typeof id === "string" && id)
+    : [];
+  await storage.set(WALLET_ORDER_STORAGE_KEY, clean);
+  return { status: true, order: clean };
+}
+
 /** Rename a wallet in the registry. */
 async function renameWallet(id, name) {
   const wallets = await listWallets();
@@ -886,11 +908,13 @@ async function handleRestoreApply(message) {
     );
 
     // Ensure the restored account is present in the picker registry.
+    // The name is *allocated*, not counted: this used `wallets.length + 1`,
+    // which re-issued an existing label after any wallet was deleted.
     const wallets = await listWallets();
     if (!wallets.some((w) => w.id === entry.account_id)) {
       wallets.push({
         id: entry.account_id,
-        name: `Wallet ${wallets.length + 1}`,
+        name: uniqueWalletName(wallets),
         created: Date.now(),
       });
       await storage.set(ACCOUNTS_STORAGE_KEY, wallets);
@@ -925,6 +949,8 @@ const nileWallet = {
   listWallets: () => listWallets(),
   walletOverview: () => walletOverview(),
   createWallet: (name) => createWallet(name),
+  getWalletOrder: () => getWalletOrder(),
+  setWalletOrder: (ids) => setWalletOrder(ids),
   renameWallet: (id, name) => renameWallet(id, name),
   deleteWallet: (id) => deleteWallet(id),
 

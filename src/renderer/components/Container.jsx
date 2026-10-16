@@ -11,7 +11,8 @@ import { cn } from "@/utils";
  * `className` is left for layout only.
  */
 const WIDTHS = {
-  sm: "max-w-lg", // 32rem — single-column forms (network check, unlock)
+  sm: "max-w-lg", // 32rem — single-column forms
+  auth: "max-w-3xl", // 48rem — the pre-vault screens (network check, unlock)
   md: "max-w-6xl", // 72rem — the wallet screen (needs to exceed lg breakpoint for 2-col)
   lg: "max-w-3xl",
   xl: "max-w-6xl", // 72rem — the picker grid

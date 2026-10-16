@@ -1,4 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  DndContext,
+  KeyboardSensor,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  rectSortingStrategy,
+  sortableKeyboardCoordinates,
+} from "@dnd-kit/sortable";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import {
@@ -7,6 +20,7 @@ import {
   HiOutlineArrowUpTray,
   HiOutlineCheckCircle,
   HiOutlineEllipsisHorizontal,
+  HiOutlineFunnel,
   HiOutlineMagnifyingGlass,
   HiOutlinePencilSquare,
   HiOutlinePlus,
@@ -25,14 +39,16 @@ import IconButton from "@/components/IconButton";
 import Input from "@/components/Input";
 import Modal from "@/components/Modal";
 import PasswordInput from "@/components/PasswordInput";
-import { Skeleton, SkeletonTiles } from "@/components/Skeleton";
-import AmountValue from "@/components/AmountValue";
+import { SkeletonTiles } from "@/components/Skeleton";
+import WalletTile from "@/components/WalletTile";
 import nileWalletClient, { MIN_BACKUP_PASSWORD_LENGTH } from "@/lib/nileWalletClient";
 import { openTextFile, saveTextFile } from "@/lib/files.js";
 import { truncateAddress } from "@/lib/address.js";
+import { disambiguateLabels } from "@/lib/walletName.js";
+import { applyWalletOrder, reorderIds } from "@/lib/walletOrder.js";
 import { cn } from "@/utils";
 import TonCoinIcon from "@/assets/images/toncoin-ton-logo.svg";
-import NileVaultLogo from "@/assets/images/nilevault-logo.jpg";
+import NileVaultMark from "@/assets/images/nilevault-mark.png";
 
 const EMPTY = [];
 
@@ -40,29 +56,32 @@ const EMPTY = [];
 const keyOf = (ids) => ids.join(",");
 
 /**
- * Per-wallet accent.
+ * Per-wallet monogram tile.
  *
- * Every tile previously used the same logo on the same surface, so a grid of
- * wallets was unreadable at a glance. The accent and monogram are derived from
- * the wallet id and stay inside the navy/gold palette — no new hues.
+ * One neutral treatment for every tile — distinction comes from the monogram
+ * letter, selection from the gold border. A grid where half the tiles glow
+ * gold is noise, not information.
  */
-const ACCENTS = [
-  "border-nile-gold-500/40 bg-nile-gold-500/12 text-nile-gold-400",
-  "border-nile-gold-300/35 bg-nile-gold-300/10 text-nile-gold-300",
-  "border-neutral-300/30 bg-neutral-300/10 text-neutral-200",
-  "border-neutral-500/40 bg-neutral-500/12 text-neutral-300",
+const TILE_ACCENT =
+  "border-border bg-accent text-secondary-foreground";
+
+const accentFor = () => TILE_ACCENT;
+
+/** Filter options in the status strip. */
+const FILTERS = [
+  { id: "all", label: "All" },
+  { id: "funded", label: "With Balance" },
+  { id: "empty", label: "Empty" },
 ];
 
-function hashString(value) {
-  let hash = 0;
-  const text = String(value || "");
-  for (let index = 0; index < text.length; index += 1) {
-    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+/** True when a wallet holds a positive balance. Never throws. */
+const hasFunds = (detail) => {
+  try {
+    return detail?.balanceNano != null && BigInt(detail.balanceNano) > 0n;
+  } catch {
+    return false;
   }
-  return hash;
-}
-
-const accentFor = (id) => ACCENTS[hashString(id) % ACCENTS.length];
+};
 
 const monogramFor = (name) => {
   const trimmed = String(name || "").trim();
@@ -76,10 +95,13 @@ const monogramFor = (name) => {
   return `${words[0][0]}${words[1][0]}`.toUpperCase();
 };
 
-export default function WalletPicker({ onSelect }) {
+export default function WalletPicker({ onSelect, networkStatus = null }) {
   const queryClient = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
+  const [showSearch, setShowSearch] = useState(false);
+  const [showFilter, setShowFilter] = useState(true);
   const [showBackupModal, setShowBackupModal] = useState(false);
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [showAddToken, setShowAddToken] = useState(false);
@@ -94,13 +116,26 @@ export default function WalletPicker({ onSelect }) {
 
   /* ── Data ─────────────────────────────────────────────────────────────── */
 
+  /**
+   * The user's custom wallet order (a list of ids). Its own query, so the
+   * registry and the order can change independently of each other.
+   */
+  const orderQuery = useQuery({
+    queryKey: ["nile-wallet-order"],
+    queryFn: () => nileWalletClient.getWalletOrder(),
+  });
+
   const walletsQuery = useQuery({
     queryKey: ["nile-wallets"],
     queryFn: () => nileWalletClient.listWallets(),
   });
   const wallets = useMemo(
-    () => (Array.isArray(walletsQuery.data) ? walletsQuery.data : EMPTY),
-    [walletsQuery.data],
+    () =>
+      applyWalletOrder(
+        Array.isArray(walletsQuery.data) ? walletsQuery.data : EMPTY,
+        orderQuery.data || EMPTY,
+      ),
+    [walletsQuery.data, orderQuery.data],
   );
   const walletIds = useMemo(() => wallets.map((wallet) => wallet.id), [wallets]);
 
@@ -136,20 +171,6 @@ export default function WalletPicker({ onSelect }) {
     const map = {};
     for (const row of detailsQuery.data || []) map[row.id] = row;
     return map;
-  }, [detailsQuery.data]);
-
-  /** Total across every wallet, summed in base units so it stays exact. */
-  const totalNano = useMemo(() => {
-    let sum = 0n;
-    for (const row of detailsQuery.data || []) {
-      if (!row.balanceNano) continue;
-      try {
-        sum += BigInt(row.balanceNano);
-      } catch {
-        /* skip a malformed value rather than zeroing the whole total */
-      }
-    }
-    return sum;
   }, [detailsQuery.data]);
 
   const hasUnreadableBalance = (detailsQuery.data || []).some(
@@ -238,6 +259,25 @@ export default function WalletPicker({ onSelect }) {
 
   const deleteMutation = useMutation({
     mutationFn: (id) => nileWalletClient.deleteWallet(id),
+    /*
+     * Deleting a wallet must take its whole tile with it, immediately — not
+     * once a refetch happens to land. The registry and the saved order are
+     * both updated in place, so the pallet cannot outlive the wallet it
+     * represents even if the refetch is slow or fails.
+     */
+    onSuccess: (_result, id) => {
+      queryClient.setQueryData(["nile-wallets"], (current) =>
+        Array.isArray(current)
+          ? current.filter((wallet) => wallet.id !== id)
+          : current,
+      );
+      queryClient.setQueryData(["nile-wallet-order"], (current) =>
+        Array.isArray(current)
+          ? current.filter((saved) => saved !== id)
+          : current,
+      );
+      queryClient.removeQueries({ queryKey: ["nile-picker-details"] });
+    },
   });
 
   const removeTokenMutation = useMutation({
@@ -269,11 +309,13 @@ export default function WalletPicker({ onSelect }) {
       .then(() => {
         toast.success(`${wallet.name} removed`);
         setDeleteTarget(null);
-        refreshAll();
       })
       .catch((error) => {
+        // The registry may already have dropped the entry before this threw, so
+        // re-read it rather than leaving the grid showing a stale tile.
         toast.error(error?.message || "Failed to remove wallet");
-      });
+      })
+      .finally(refreshAll);
   }, [deleteTarget, deleteMutation, refreshAll]);
 
   const confirmRemoveToken = useCallback(() => {
@@ -296,17 +338,52 @@ export default function WalletPicker({ onSelect }) {
 
   /* ── Interaction ──────────────────────────────────────────────────────── */
 
-  const filtered = useMemo(() => {
+  /** id → address, so duplicate wallet labels can be told apart in the grid. */
+  const addressById = useMemo(() => {
+    const map = {};
+    for (const wallet of wallets) {
+      map[wallet.id] = detailsById[wallet.id]?.address || null;
+    }
+    return map;
+  }, [wallets, detailsById]);
+
+  /** Display labels: a label shared by two wallets gains an address suffix. */
+  const labelById = useMemo(
+    () => disambiguateLabels(wallets, addressById),
+    [wallets, addressById],
+  );
+
+  /**
+   * Funded count. Computed from the same rows the tiles render from, so the
+   * count and the grid cannot contradict each other.
+   */
+  const fundedCount = useMemo(
+    () => wallets.filter((wallet) => hasFunds(detailsById[wallet.id])).length,
+    [wallets, detailsById],
+  );
+
+  /**
+   * Search + status filter.
+   *
+   * Filtering only ever *hides* tiles: it never reorders them, so a custom drag
+   * order stays meaningful across filter changes.
+   */
+  const visible = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return wallets;
     return wallets.filter((wallet) => {
       const detail = detailsById[wallet.id];
+      if (filter === "funded" && !hasFunds(detail)) return false;
+      if (filter === "empty" && hasFunds(detail)) return false;
+      if (!query) return true;
+      const label = labelById[wallet.id] || wallet.name || "";
       return (
-        wallet.name.toLowerCase().includes(query) ||
-        (detail?.address && detail.address.toLowerCase().includes(query))
+        label.toLowerCase().includes(query) ||
+        String(wallet.name || "").toLowerCase().includes(query) ||
+        Boolean(detail?.address && detail.address.toLowerCase().includes(query))
       );
     });
-  }, [wallets, detailsById, search]);
+  }, [wallets, detailsById, search, filter, labelById]);
+
 
   /**
    * Open a wallet with a press handoff: the tile lifts and dims for a beat
@@ -358,172 +435,155 @@ export default function WalletPicker({ onSelect }) {
   }, [contextMenu, closeContextMenu]);
 
   const hasWallets = wallets.length > 0;
+  /* ── Reordering ───────────────────────────────────────────────────────── */
+
+  const sensors = useSensors(
+    // A few pixels of travel before a drag starts, so a plain click still opens
+    // the wallet rather than picking the tile up.
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    }),
+  );
+
+  const orderMutation = useMutation({
+    mutationFn: (ids) => nileWalletClient.setWalletOrder(ids),
+    // Write the new order into the cache immediately, so the tiles cannot snap
+    // back to the old order for the duration of a refetch.
+    onSuccess: (result, ids) => {
+      queryClient.setQueryData(["nile-wallet-order"], result?.order || ids);
+    },
+    onError: () => {
+      toast.error("Could not save the new wallet order");
+      queryClient.invalidateQueries({ queryKey: ["nile-wallet-order"] });
+    },
+  });
+
+  const sortableIds = useMemo(
+    () => visible.map((wallet) => wallet.id),
+    [visible],
+  );
+
+  const handleDragEnd = useCallback(
+    (event) => {
+      const { active, over } = event;
+      if (!over || active.id === over.id) return;
+      // Resolved against the FULL list: a filter is a window onto one order, not
+      // an order of its own, so dragging inside a filtered view moves the wallet
+      // in the single underlying sequence.
+      const fullIds = wallets.map((wallet) => wallet.id);
+      orderMutation.mutate(reorderIds(fullIds, active.id, over.id));
+    },
+    [wallets, orderMutation],
+  );
+
   const searching = search.trim().length > 0;
 
   /* ── Render ───────────────────────────────────────────────────────────── */
 
   return (
     <Container size="xl" className="flex flex-col gap-3">
-      {/* Total balance */}
-      <div className="nc-card relative overflow-hidden p-4 text-center">
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-x-0 -top-24 h-40 bg-[radial-gradient(ellipse_at_center,rgba(212,168,67,0.14),transparent_70%)]"
-        />
-        <div className="relative flex flex-col items-center gap-1">
-          <span className="nc-section">Total Balance</span>
-          <span className="nc-display text-nile-gold-400">
-            {detailsQuery.isLoading && hasWallets ? (
-              <Skeleton className="h-9 w-40" rounded="rounded-lg" />
-            ) : (
-              <AmountValue value={totalNano} suffix=" TON" />
-            )}
-          </span>
-          <span className="nc-caption flex items-center gap-1">
-            {hasWallets
-              ? `${wallets.length} wallet${wallets.length === 1 ? "" : "s"}`
-              : "No wallets yet"}
-            {hasUnreadableBalance ? (
-              <span
-                className="text-red-400"
-                title="One or more balances could not be read"
-              >
-                · some unavailable
-              </span>
-            ) : null}
-            <IconButton
-              label="Refresh balances"
-              onClick={refreshBalances}
-              loading={detailsQuery.isFetching}
-              size="size-6"
-              className="ml-1"
-            >
-              <HiOutlineArrowPath className="size-3.5" />
-            </IconButton>
-          </span>
+            {/* ── Header ─────────────────────────────────────────────────────── */}
+      <div className="nc-card flex flex-wrap items-center gap-x-4 gap-y-3 p-4">
+        <div className="flex items-center gap-3">
+          <img
+            src={NileVaultMark}
+            className="size-11 rounded-xl border border-border"
+            alt=""
+          />
+          <span className="nc-wordmark text-xl leading-none">NileVault</span>
+        </div>
+
+        {/*
+          No aggregate balance here. A vault-wide total is a *portfolio*
+          figure: it cannot say which wallet holds what, it competes with the
+          per-tile balances that do, and at the top of the screen it read as
+          the number to act on. Balances belong on the tiles.
+        */}
+        <div className="ml-auto flex items-center gap-1.5">
+          <IconButton
+            label={showSearch ? "Hide search" : "Search wallets"}
+            onClick={() => setShowSearch((value) => !value)}
+          >
+            <HiOutlineMagnifyingGlass className="size-4" />
+          </IconButton>
+          <div className="h-6 w-px bg-border" aria-hidden="true" />
+          <IconButton
+            label="Filter wallets"
+            onClick={() => setShowFilter((value) => !value)}
+          >
+            <HiOutlineFunnel className="size-4" />
+          </IconButton>
+          <IconButton
+            label="Refresh balances"
+            onClick={refreshBalances}
+            loading={detailsQuery.isFetching}
+          >
+            <HiOutlineArrowPath className="size-4" />
+          </IconButton>
         </div>
       </div>
 
-      {/* Portfolio */}
+      {/* ── Status strip + filter ──────────────────────────────────────── */}
       {hasWallets ? (
-        <div className="nc-card p-3">
-          <div className="mb-3 flex items-center justify-between gap-2">
-            <h3 className="nc-section">All Tokens</h3>
-            <span className="nc-caption">
-              {portfolioTokens.length + 1} asset
-              {portfolioTokens.length > 0 ? "s" : ""}
-            </span>
-          </div>
-
-          <div className="-mx-1 flex gap-3 overflow-x-auto px-1 pb-1">
-            <div className="flex min-w-[130px] shrink-0 flex-col gap-1 rounded-xl border border-nile-gold-500/25 bg-nile-gold-500/[0.06] p-3">
-              <div className="flex items-center gap-2">
-                <img src={TonCoinIcon} className="size-5" alt="" />
-                <span className="text-sm font-bold">TON</span>
-              </div>
-              <span className="text-base font-bold text-nile-gold-500">
-                {detailsQuery.isLoading ? (
-                  <Skeleton className="h-5 w-20" />
-                ) : (
-                  <AmountValue value={totalNano} />
-                )}
-              </span>
-            </div>
-
-            {portfolioTokensQuery.isLoading && hasWallets
-              ? [0, 1].map((index) => (
-                  <div
-                    key={index}
-                    className="flex min-w-[130px] shrink-0 flex-col gap-2 rounded-xl border border-white/10 bg-white/[0.03] p-3"
-                  >
-                    <Skeleton className="h-5 w-20" />
-                    <Skeleton className="h-5 w-24" />
-                  </div>
-                ))
-              : portfolioTokens.map((token) => {
-                  const raw = portfolioBalances[token.jetton_master_address];
-                  const unreadable =
-                    raw === undefined &&
-                    portfolioBalancesQuery.data?.unreachable === true;
-                  return (
-                    <div
-                      key={token.jetton_master_address}
-                      className="group relative flex min-w-[130px] shrink-0 flex-col gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-3 transition-[border-color,background-color,transform] duration-[var(--nc-dur)] hover:-translate-y-0.5 hover:border-nile-gold-500/40 hover:bg-white/[0.06]"
-                    >
-                      <div className="absolute right-1.5 top-1.5 flex opacity-0 transition-opacity duration-[var(--nc-dur)] group-hover:opacity-100 focus-within:opacity-100">
-                        <IconButton
-                          label={`Remove ${token.symbol}`}
-                          variant="danger"
-                          size="size-5"
-                          onClick={() => setRemoveTokenTarget(token)}
-                        >
-                          <HiOutlineXMark className="size-3" />
-                        </IconButton>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {token.icon_url ? (
-                          <img
-                            src={token.icon_url}
-                            className="size-5 rounded-full bg-white/10 object-cover"
-                            alt=""
-                          />
-                        ) : (
-                          <span className="inline-flex size-5 items-center justify-center rounded-full border border-nile-gold-500/30 bg-nile-gold-500/10 text-[9px] font-bold text-nile-gold-500">
-                            {token.symbol?.slice(0, 2).toUpperCase() || "?"}
-                          </span>
-                        )}
-                        <span className="truncate text-sm font-bold">
-                          {token.symbol}
-                        </span>
-                      </div>
-                      <span className="text-base font-bold text-nile-gold-500">
-                        {portfolioBalancesQuery.isLoading && raw === undefined ? (
-                          <Skeleton className="h-5 w-24" />
-                        ) : raw === undefined ? (
-                          <span
-                            className="text-neutral-500"
-                            title={unreadable ? "Balance unavailable" : undefined}
-                          >
-                            —
-                          </span>
-                        ) : (
-                          <AmountValue
-                            value={raw}
-                            decimals={Number(token.decimals) || 9}
-                          />
-                        )}
-                      </span>
-                    </div>
-                  );
-                })}
-
-            <button
-              type="button"
-              onClick={() => setShowAddToken(true)}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-1">
+          {networkStatus ? (
+            <span
               className={cn(
-                "flex min-w-[130px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl",
-                "border border-dashed border-white/15 p-3 text-neutral-400",
-                "transition-[border-color,color,background-color,transform] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
-                "hover:-translate-y-0.5 hover:border-nile-gold-500/60 hover:bg-nile-gold-500/[0.06] hover:text-nile-gold-400",
-                "active:translate-y-0 active:scale-[0.98]",
+                "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold",
+                networkStatus === "ok"
+                  ? "border-success/30 bg-success/10 text-success"
+                  : "border-amber-500/30 bg-amber-500/10 text-amber-400",
               )}
             >
-              <HiOutlinePlus className="size-5" />
-              <span className="text-xs font-bold">Add Token</span>
-            </button>
-          </div>
+              <span
+                className={cn(
+                  "size-1.5 rounded-full",
+                  networkStatus === "ok" ? "bg-success" : "bg-amber-400",
+                )}
+                aria-hidden="true"
+              />
+              {networkStatus === "ok" ? "Connected" : "Degraded"}
+            </span>
+          ) : null}
 
-          {!portfolioTokensQuery.isLoading && portfolioTokens.length === 0 ? (
-            <p className="nc-caption mt-2">
-              No custom tokens tracked yet. Add a Jetton by its contract address
-              to watch its balance.
-            </p>
+          {/*
+            Both counts come from the same rows the tiles render from, so they
+            cannot contradict each other the way the reference mockup's do.
+          */}
+          <span className="nc-caption">
+            {wallets.length} wallet{wallets.length === 1 ? "" : "s"}
+          </span>
+          <div className="h-4 w-px bg-border" aria-hidden="true" />
+          <span className="nc-caption">
+            {fundedCount} with balance
+          </span>
+
+          {showFilter ? (
+          <div className="ml-auto flex items-center gap-1 rounded-lg border border-border p-1">
+            {FILTERS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setFilter(option.id)}
+                aria-pressed={filter === option.id}
+                className={cn(
+                  "rounded-md px-3 py-1 text-xs font-medium transition-colors duration-[var(--nc-dur)]",
+                  filter === option.id
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           ) : null}
         </div>
       ) : null}
 
-      {/* Search */}
-      {wallets.length > 1 ? (
+{/* Search */}
+      {showSearch && wallets.length > 1 ? (
         <div className="relative">
           <HiOutlineMagnifyingGlass className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-neutral-500" />
           <Input
@@ -547,11 +607,11 @@ export default function WalletPicker({ onSelect }) {
       {!walletsQuery.isLoading && !hasWallets ? (
         <div className="nc-card nc-anim-rise flex flex-col items-center gap-3 p-8 text-center">
           <img
-            src={NileVaultLogo}
-            className="size-16 rounded-2xl border border-white/10 shadow-lg"
+            src={NileVaultMark}
+            className="size-16 rounded-xl border border-border"
             alt=""
           />
-          <h2 className="text-lg font-bold">Your vault is empty</h2>
+          <h2 className="text-lg font-semibold tracking-tight">Your vault is empty</h2>
           <p className="nc-body max-w-sm text-neutral-400">
             NileVault keeps every TON wallet you own encrypted on this device.
             Create your first wallet — you can generate a new recovery phrase or
@@ -573,119 +633,98 @@ export default function WalletPicker({ onSelect }) {
         </div>
       ) : null}
 
-      {/* Tiles */}
-      {walletsQuery.isLoading ? (
-        <SkeletonTiles count={4} />
-      ) : null}
+                  {/* Tiles */}
+      {walletsQuery.isLoading ? <SkeletonTiles count={4} /> : null}
 
-      {!walletsQuery.isLoading && hasWallets && filtered.length === 0 && searching ? (
+      {!walletsQuery.isLoading && hasWallets && visible.length === 0 ? (
         <div className="nc-card nc-anim-rise flex flex-col items-center gap-2 p-8 text-center">
           <HiOutlineMagnifyingGlass className="size-6 text-neutral-500" />
           <p className="nc-body text-neutral-400">
-            No wallets match &ldquo;{search}&rdquo;
+            {searching ? (
+              <>No wallets match &ldquo;{search}&rdquo;</>
+            ) : (
+              "No wallets in this filter."
+            )}
           </p>
-          <Button variant="link" size="sm" onClick={() => setSearch("")}>
-            Clear search
+          <Button
+            variant="link"
+            size="sm"
+            onClick={() => {
+              setSearch("");
+              setFilter("all");
+            }}
+          >
+            Show all wallets
           </Button>
         </div>
       ) : null}
 
-      {!walletsQuery.isLoading && hasWallets && filtered.length > 0 ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-          {filtered.map((wallet) => {
-            const detail = detailsById[wallet.id];
-            const opening = openingId === wallet.id;
-            return (
-              <div key={wallet.id} className="group relative">
-                <button
-                  type="button"
-                  onClick={() => openWallet(wallet)}
-                  onContextMenu={(event) => openContextMenu(event, wallet)}
-                  aria-label={`Open ${wallet.name}`}
-                  className={cn(
-                    "nc-card-interactive flex min-h-[7rem] w-full flex-col gap-1 p-3 text-left",
-                    opening &&
-                      "border-nile-gold-500/70 bg-nile-gold-500/[0.07] opacity-80",
-                  )}
-                  style={opening ? { transform: "scale(0.97)" } : undefined}
-                >
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={cn(
-                        "flex size-10 shrink-0 items-center justify-center rounded-xl border text-sm font-bold",
-                        accentFor(wallet.id),
-                      )}
-                    >
-                      {monogramFor(wallet.name)}
-                    </span>
-                    <span className="min-w-0 grow truncate text-sm font-bold">
-                      {wallet.name}
-                    </span>
-                  </div>
+      {!walletsQuery.isLoading && hasWallets && visible.length > 0 ? (
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          {/*
+            `items` is the *visible* ids only, but a drop is resolved against the
+            full list (see handleDragEnd) — so a filtered view is a window onto
+            one order rather than an order of its own.
+          */}
+          <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {visible.map((wallet) => (
+                <WalletTile
+                  key={wallet.id}
+                  wallet={wallet}
+                  label={labelById[wallet.id] ?? wallet.name}
+                  detail={detailsById[wallet.id]}
+                  loading={detailsQuery.isLoading}
+                  opening={openingId === wallet.id}
+                  onOpen={openWallet}
+                  onMenu={openContextMenuFromButton}
+                  onSend={(target) =>
+                    onSelect({
+                      id: target.id,
+                      name: target.name,
+                      section: "send",
+                    })
+                  }
+                  onReceive={(target) =>
+                    onSelect({
+                      id: target.id,
+                      name: target.name,
+                      section: "receive",
+                    })
+                  }
+                />
+              ))}
 
-                  <span className="text-base font-bold text-nile-gold-500">
-                    {detail?.balanceError ? (
-                      <span
-                        className="text-neutral-500"
-                        title={detail.balanceError}
-                      >
-                        —
-                      </span>
-                    ) : detail?.balanceNano == null ? (
-                      detailsQuery.isLoading ? (
-                        <Skeleton className="h-5 w-24" />
-                      ) : (
-                        "—"
-                      )
-                    ) : (
-                      <AmountValue value={detail.balanceNano} suffix=" TON" />
-                    )}
-                  </span>
-
-                  <span className="nc-mono mt-auto truncate text-neutral-500">
-                    {truncateAddress(detail?.address) || "—"}
-                  </span>
-                </button>
-
-                {/* Keyboard-reachable entry point for the same menu. */}
-                <div className="absolute right-2 top-2 opacity-0 transition-opacity duration-[var(--nc-dur)] group-hover:opacity-100 focus-within:opacity-100">
-                  <IconButton
-                    label={`Actions for ${wallet.name}`}
-                    size="size-7"
-                    onClick={(event) => openContextMenuFromButton(event, wallet)}
-                    className="bg-neutral-900/70 backdrop-blur-sm hover:bg-white/[0.12]"
-                  >
-                    <HiOutlineEllipsisHorizontal className="size-4" />
-                  </IconButton>
-                </div>
-              </div>
-            );
-          })}
-
-          <button
-            type="button"
-            onClick={() => setShowAdd(true)}
-            className={cn(
-              "flex min-h-[7rem] flex-col items-center justify-center gap-2 rounded-xl",
-              "border border-dashed border-white/15 text-neutral-400",
-              "transition-[border-color,color,background-color,transform] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
-              "hover:-translate-y-0.5 hover:border-nile-gold-500/60 hover:bg-nile-gold-500/[0.06] hover:text-nile-gold-400",
-              "active:translate-y-0 active:scale-[0.98]",
-            )}
-          >
-            <HiOutlinePlus className="size-5" />
-            <span className="text-xs font-bold">Add Wallet</span>
-          </button>
-        </div>
+              {/* Deliberately outside `items`: an action, never a draggable. */}
+              <button
+                type="button"
+                onClick={() => setShowAdd(true)}
+                className={cn(
+                  "flex min-h-[8.5rem] flex-col items-center justify-center gap-2 rounded-xl",
+                  "border border-dashed border-border text-muted-foreground",
+                  "transition-[border-color,color,background-color] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
+                  "hover:border-[var(--nc-border-active)] hover:text-foreground",
+                )}
+              >
+                <HiOutlinePlus className="size-6 text-primary" />
+                <span className="text-xs font-medium">Add Wallet</span>
+              </button>
+            </div>
+          </SortableContext>
+        </DndContext>
       ) : null}
 
-      {/* Vault actions */}
+{/* Vault actions */}
       {hasWallets ? (
         <div className="flex gap-2">
           <button
             type="button"
             onClick={() => setShowBackupModal(true)}
-            className="nc-card-interactive flex flex-1 items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold text-neutral-400 hover:text-nile-gold-400"
+            className="nc-card-interactive flex flex-1 items-center justify-center gap-2 rounded-lg border border-primary/50 bg-card px-3 py-2.5 text-xs font-medium text-primary hover:border-primary hover:text-primary"
           >
             <HiOutlineShieldCheck className="size-4" />
             Backup Vault
@@ -693,7 +732,7 @@ export default function WalletPicker({ onSelect }) {
           <button
             type="button"
             onClick={() => setShowRestoreModal(true)}
-            className="nc-card-interactive flex flex-1 items-center justify-center gap-2 px-3 py-2.5 text-xs font-bold text-neutral-400 hover:text-nile-gold-400"
+            className="nc-card-interactive flex flex-1 items-center justify-center gap-2 rounded-lg border border-border bg-card px-3 py-2.5 text-xs font-medium text-muted-foreground hover:text-foreground"
           >
             <HiOutlineArrowUpTray className="size-4" />
             Restore
@@ -798,7 +837,7 @@ export default function WalletPicker({ onSelect }) {
         <div
           role="menu"
           aria-label={`Actions for ${contextMenu.wallet.name}`}
-          className="nc-anim-scale fixed z-[70] min-w-[170px] origin-top-left overflow-hidden rounded-xl border border-white/10 bg-neutral-900/95 py-1 shadow-2xl backdrop-blur-xl"
+          className="nc-anim-scale fixed z-[70] min-w-[170px] origin-top-left overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-lg"
           style={{
             left: Math.min(contextMenu.x, window.innerWidth - 190),
             top: Math.min(contextMenu.y, window.innerHeight - 100),
@@ -812,9 +851,9 @@ export default function WalletPicker({ onSelect }) {
               closeContextMenu();
               setRenameTarget(contextMenu.wallet);
             }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-[var(--nc-dur)] hover:bg-white/[0.08] active:bg-white/[0.12]"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors duration-[var(--nc-dur)] hover:bg-accent hover:text-accent-foreground"
           >
-            <HiOutlinePencilSquare className="size-4 text-neutral-400" />
+            <HiOutlinePencilSquare className="size-4 text-muted-foreground" />
             Rename
           </button>
           <button
@@ -824,7 +863,7 @@ export default function WalletPicker({ onSelect }) {
               closeContextMenu();
               setDeleteTarget(contextMenu.wallet);
             }}
-            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-red-400 transition-colors duration-[var(--nc-dur)] hover:bg-red-500/15 active:bg-red-500/25"
+            className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-destructive transition-colors duration-[var(--nc-dur)] hover:bg-destructive/10"
           >
             <HiOutlineTrash className="size-4" />
             Delete
@@ -883,13 +922,13 @@ function AddTokenModal({ wallets, onClose, onAdded }) {
             value={selectedWallet}
             onChange={(event) => setSelectedWallet(event.target.value)}
             className={cn(
-              "w-full appearance-none rounded-xl border border-white/10 bg-white/[0.05] px-3 py-2.5 text-sm",
+              "h-9 w-full appearance-none rounded-md border border-input bg-transparent px-3 py-1 text-sm",
               "outline-none transition-[border-color,box-shadow] duration-[var(--nc-dur)]",
-              "focus:border-nile-gold-500/60 focus:ring-2 focus:ring-nile-gold-500/20",
+              "focus-visible:border-ring/60 focus-visible:ring-2 focus-visible:ring-ring/40",
             )}
           >
             {wallets.map((wallet) => (
-              <option key={wallet.id} value={wallet.id} className="bg-neutral-900">
+              <option key={wallet.id} value={wallet.id} className="bg-popover">
                 {wallet.name}
               </option>
             ))}
@@ -1106,8 +1145,8 @@ function VaultBackupModal({ onClose, walletCount }) {
           />
         </Field>
 
-        <div className="flex items-start gap-2 rounded-xl border border-red-500/25 bg-red-500/[0.06] p-3">
-          <HiOutlineShieldCheck className="mt-0.5 size-4 shrink-0 text-red-400" />
+        <div className="flex items-start gap-2 rounded-xl border border-destructive/25 bg-destructive/[0.06] p-3">
+          <HiOutlineShieldCheck className="mt-0.5 size-4 shrink-0 text-destructive" />
           <p className="nc-caption leading-relaxed text-red-300/90">
             Losing both this file and its password means permanent loss of funds.
             There is no recovery path beyond that.
@@ -1228,11 +1267,11 @@ function VaultRestoreModal({ onClose, onRestored }) {
           disabled={loading || Boolean(preview)}
           className="nc-card-interactive flex w-full items-center gap-3 p-3 text-left disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl border border-nile-gold-500/30 bg-nile-gold-500/10 text-nile-gold-400">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-border bg-accent text-muted-foreground">
             <HiOutlineDocumentDuplicate className="size-4" />
           </span>
           <span className="min-w-0 grow">
-            <span className="block truncate text-sm font-bold">
+            <span className="block truncate text-sm font-medium">
               {fileName || "Choose backup file…"}
             </span>
             <span className="nc-caption block">
@@ -1293,7 +1332,7 @@ function VaultRestoreModal({ onClose, onRestored }) {
               {preview.entries.map((entry, index) => (
                 <div
                   key={entry.account_id}
-                  className="nc-anim-rise flex items-center gap-3 rounded-xl border border-white/10 bg-white/[0.04] p-3"
+                  className="nc-anim-rise flex items-center gap-3 rounded-lg border border-border bg-card p-3"
                   style={{ animationDelay: `${index * 40}ms` }}
                 >
                   <div className="flex min-w-0 grow flex-col">
@@ -1310,7 +1349,7 @@ function VaultRestoreModal({ onClose, onRestored }) {
                     </span>
                   </div>
                   {entry.exists ? (
-                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs font-bold text-nile-gold-400">
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
                       <input
                         type="checkbox"
                         checked={Boolean(overwrite[entry.account_id])}
@@ -1340,7 +1379,7 @@ function VaultRestoreModal({ onClose, onRestored }) {
                 : "Existing wallets are kept unless you tick Overwrite."}
             </p>
 
-            {error ? <p className="nc-message text-red-400">{error}</p> : null}
+            {error ? <p className="nc-message text-destructive">{error}</p> : null}
 
             <div className="flex gap-2">
               <Button

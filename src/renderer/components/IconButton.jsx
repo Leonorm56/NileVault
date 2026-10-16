@@ -24,14 +24,15 @@ const IconButton = forwardRef(function IconButton(
       disabled={disabled || loading}
       aria-busy={loading || undefined}
       className={cn(
-        "inline-flex shrink-0 items-center justify-center rounded-lg",
-        "transition-[background-color,color,transform] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
-        "active:scale-90 disabled:active:scale-100 disabled:opacity-40",
+        "inline-flex shrink-0 items-center justify-center rounded-md",
+        // Same press + hover contract as Button.
+        "nc-press",
+        "disabled:opacity-40",
         variant === "ghost" &&
-          "text-neutral-400 hover:bg-white/[0.09] hover:text-nile-gold-400",
-        variant === "muted" && "text-neutral-500 hover:bg-white/[0.07] hover:text-neutral-200",
+          "text-neutral-400 hover:bg-accent hover:text-accent-foreground",
+        variant === "muted" && "text-neutral-500 hover:bg-accent hover:text-neutral-200",
         variant === "danger" &&
-          "text-neutral-400 hover:bg-red-500/15 hover:text-red-400",
+          "text-neutral-400 hover:bg-destructive/15 hover:text-destructive",
         variant === "gold" && "text-nile-gold-500 hover:bg-nile-gold-500/15",
         size,
         className,

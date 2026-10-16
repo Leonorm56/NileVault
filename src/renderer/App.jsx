@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HiOutlineArrowLeft, HiOutlineCheckCircle, HiOutlineLockClosed, HiOutlineExclamationTriangle } from "react-icons/hi2";
+import { HiOutlineArrowLeft, HiOutlineCheckCircle, HiOutlineCog6Tooth, HiOutlineLockClosed, HiOutlineExclamationTriangle, HiOutlinePaperAirplane, HiOutlineQrCode, HiOutlineStar, HiOutlineWallet } from "react-icons/hi2";
 
+import AppShell from "./components/AppShell";
 import Button from "./components/Button";
 import NetworkCheck from "./screens/NetworkCheck.jsx";
 import Unlock from "./screens/Unlock.jsx";
@@ -31,15 +32,12 @@ export default function App() {
   const queryClient = useQueryClient();
   const [networkPassed, setNetworkPassed] = useState(false);
   const [selected, setSelected] = useState(null); // { id, name }
-  const [version, setVersion] = useState("");
+  // Section a wallet tap asked to land on ("send" / "receive" from a tile).
+  const [pendingSection, setPendingSection] = useState(null);
   const [locking, setLocking] = useState(false);
   const [networkStatus, setNetworkStatus] = useState(null); // null | "ok" | "degraded"
   const previousScreenRef = useRef("network");
   const [transition, setTransition] = useState("nc-anim-rise");
-
-  useEffect(() => {
-    window.nilevault?.getVersion?.().then(setVersion).catch(() => {});
-  }, []);
 
   /* Network status — checked once on mount and after each network screen pass. */
   const checkNetwork = useCallback(() => {
@@ -101,11 +99,70 @@ export default function App() {
 
   const goToPicker = useCallback(() => setSelected(null), []);
 
+  const scrollToSection = useCallback((id) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, []);
+
+  /*
+   * Open a wallet, optionally at a section.
+   *
+   * The wallet view mounts only once `selected` is set, so the scroll cannot
+   * happen on the same tick — scrolling immediately finds no element and does
+   * nothing at all. The pending id is consumed by the effect below, after the
+   * wallet has rendered.
+   */
+  const openWallet = useCallback((wallet) => {
+    setSelected(wallet);
+    setPendingSection(wallet?.section || null);
+  }, []);
+
+  useEffect(() => {
+    if (screen !== "wallet" || !pendingSection) return undefined;
+    const id = pendingSection;
+    setPendingSection(null);
+    const frame = requestAnimationFrame(() => scrollToSection(id));
+    return () => cancelAnimationFrame(frame);
+  }, [screen, pendingSection, scrollToSection]);
+
+  /*
+   * The pre-vault screens are a single centered composition — lockup, line of
+   * context, one card — matching the target design. The app chrome (connection
+   * pill, Lock) only belongs once there is a vault to act on, so it is not
+   * rendered before unlock.
+   */
+  const showChrome = screen === "picker" || screen === "wallet";
+
+  const walletNav = useMemo(
+    () => [
+      { id: "overview", label: "Wallet", icon: HiOutlineWallet },
+      { id: "send", label: "Send", icon: HiOutlinePaperAirplane },
+      { id: "receive", label: "Receive", icon: HiOutlineQrCode },
+      { id: "tokens", label: "Tokens", icon: HiOutlineStar },
+      { id: "settings", label: "Settings", icon: HiOutlineCog6Tooth, disabled: true },
+    ],
+    [],
+  );
+
   return (
     <div className="flex min-h-full flex-col">
-      {/* ── Header chrome ─────────────────────────────────────────────── */}
-      <header className="sticky top-0 z-40 border-b border-white/[0.07] bg-neutral-950/80 backdrop-blur-xl">
+      {/*
+        ── Header chrome ─────────────────────────────────────────────────
+
+        Floating chrome: translucent, and its boundary is *faded* rather than
+        drawn as a 1px rule, so content dims into the bar as it scrolls under
+        instead of stopping at a line.
+      */}
+      {showChrome ? (
+      <header className="nc-scroll-edge sticky top-0 z-40 bg-background/80 backdrop-blur-md">
         <div className="mx-auto flex w-full items-center gap-3 px-5 py-2.5">
+          {/*
+            The left edge belongs to wayfinding, never to branding.
+
+            The wordmark and the version number were spending the most valuable
+            slot in the layout on a name the user just launched and a build
+            number nobody reads mid-task. What earns that slot instead is where
+            you are and how to get out, and the vault's own state.
+          */}
           {screen === "wallet" ? (
             <Button
               variant="ghost"
@@ -116,24 +173,14 @@ export default function App() {
               <HiOutlineArrowLeft className="size-4" />
               Wallets
             </Button>
-          ) : (
-            <span className="nc-title select-none text-lg leading-none">
-              NileVault
-            </span>
-          )}
-
-          {/* Version — next to logo, not pushed to the far right */}
-          {version ? (
-            <span className="nc-caption tabular-nums opacity-50">
-              v{version}
-            </span>
           ) : null}
 
-          {/* Network status indicator */}
+          {/* Network status leads the bar, so the vault's state is the first
+              thing read rather than something appended after the brand. */}
           {networkPassed && networkStatus ? (
             <span
               className={cn(
-                "ml-2 inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold",
+                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-bold",
                 networkStatus === "ok"
                   ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
                   : "border-amber-500/30 bg-amber-500/10 text-amber-400",
@@ -164,6 +211,7 @@ export default function App() {
           </div>
         </div>
       </header>
+      ) : null}
 
       {/* ── Screen ────────────────────────────────────────────────────── */}
       <main className="grow">
@@ -181,14 +229,20 @@ export default function App() {
           {screen === "unlock" ? <Unlock /> : null}
 
           {screen === "picker" ? (
-            <WalletPicker onSelect={(wallet) => setSelected(wallet)} />
+            <WalletPicker networkStatus={networkStatus} onSelect={openWallet} />
           ) : null}
 
           {screen === "wallet" && selected ? (
             <AccountContext.Provider
               value={{ id: selected.id, name: selected.name }}
             >
-              <NileWallet />
+              <AppShell
+                items={walletNav}
+                activeId="overview"
+                onSelect={scrollToSection}
+              >
+                <NileWallet />
+              </AppShell>
             </AccountContext.Provider>
           ) : null}
         </div>

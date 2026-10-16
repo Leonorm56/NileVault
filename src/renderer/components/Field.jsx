@@ -26,7 +26,7 @@ export default function Field({
   const Component = as || (trailing ? "div" : "label");
   const message = error || success || hint;
   const tone = error
-    ? "text-red-400"
+    ? "text-destructive"
     : success
       ? "text-emerald-400 dark:text-emerald-400"
       : "text-neutral-500";

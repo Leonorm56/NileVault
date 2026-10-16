@@ -88,6 +88,8 @@ const nileWalletClient = {
   /** Address + balance for every wallet, from one batched state request. */
   walletOverview: () => call(nileWallet.walletOverview),
   createWallet: (name) => call(nileWallet.createWallet, name),
+  getWalletOrder: () => call(nileWallet.getWalletOrder),
+  setWalletOrder: (ids) => call(nileWallet.setWalletOrder, ids),
   renameWallet: (accountId, name) =>
     call(nileWallet.renameWallet, accountId, name),
   deleteWallet: (accountId) => {

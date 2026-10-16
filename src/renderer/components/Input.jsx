@@ -3,11 +3,10 @@ import { forwardRef } from "react";
 import { cn } from "@/utils";
 
 /**
- * Text input.
+ * Text input (shadcn structure).
  *
- * Focus and invalid states are both driven by tokens so the transition between
- * them is a smooth tint rather than a hard border swap, and `invalid` also sets
- * `aria-invalid` for assistive tech.
+ * Flat transparent surface, hairline border, ring on focus. `invalid` also
+ * sets `aria-invalid` for assistive tech.
  */
 const Input = forwardRef(function Input({ className, invalid, ...props }, ref) {
   return (
@@ -16,15 +15,14 @@ const Input = forwardRef(function Input({ className, invalid, ...props }, ref) {
       ref={ref}
       aria-invalid={invalid || undefined}
       className={cn(
-        "w-full min-w-0 rounded-xl border bg-white/[0.05] px-3 py-2.5 text-sm text-neutral-100",
-        "placeholder:text-neutral-500",
-        "outline-none",
-        "transition-[border-color,box-shadow,background-color] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
-        "focus:bg-white/[0.07] focus:ring-2",
+        "h-9 w-full min-w-0 rounded-md border bg-transparent px-3 py-1 text-sm text-foreground",
+        "placeholder:text-muted-foreground",
+        "outline-none transition-[border-color,box-shadow] duration-[var(--nc-dur)] ease-[var(--nc-ease-out)]",
+        "focus-visible:ring-2 focus-visible:ring-ring/40",
         "disabled:opacity-50",
         invalid
-          ? "border-red-500/50 focus:border-red-500/70 focus:ring-red-500/20"
-          : "border-white/10 focus:border-nile-gold-500/60 focus:ring-nile-gold-500/20",
+          ? "border-destructive/60 focus-visible:border-destructive focus-visible:ring-destructive/25"
+          : "border-input focus-visible:border-ring/60",
         className,
       )}
     />

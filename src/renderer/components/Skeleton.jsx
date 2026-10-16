@@ -24,7 +24,7 @@ export function SkeletonRows({ rows = 3, className, rowClassName }) {
         <div
           key={index}
           className={cn(
-            "flex items-center gap-3 rounded-lg bg-white/[0.03] p-2",
+            "flex items-center gap-3 rounded-lg bg-accent/40 p-2",
             rowClassName,
           )}
         >
